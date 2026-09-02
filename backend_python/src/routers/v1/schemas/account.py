@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from routers.v1.schemas._common import NewPassword
+from routers.v1.schemas.sharing import GroupOut
 
 
 class AccountRegisterRequest(BaseModel):
@@ -22,6 +23,11 @@ class AccountOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class AccountMeOut(BaseModel):
+    id: UUID
+    groups: list[GroupOut] = Field(description="Группы шаринга, в которых состоит аккаунт.")
 
 
 class ChangePasswordRequest(BaseModel):

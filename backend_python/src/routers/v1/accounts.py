@@ -19,8 +19,9 @@ from sqlalchemy.orm import Session
 
 from core.account_auth import AccountClaims, get_current_account
 from core.db import get_session
-from routers.v1.schemas.account import AccountOut, AccountRegisterRequest, ChangePasswordRequest
+from routers.v1.schemas.account import AccountMeOut, AccountOut, AccountRegisterRequest, ChangePasswordRequest
 from routers.v1.schemas.password_reset import PasswordResetConfirmRequest
+from routers.v1.schemas.sharing import GroupOut
 from services.account_service import (
     ConflictError,
     InvalidActivationKeyError,
@@ -29,6 +30,7 @@ from services.account_service import (
     register_account,
 )
 from services.password_reset_service import InvalidResetTokenError, confirm_reset
+from services.sharing_service import list_my_groups
 
 router = APIRouter(prefix="/v1/accounts", tags=["Accounts"])
 
@@ -60,6 +62,18 @@ def post_register(
             detail={"error": {"code": "login_taken", "message": str(exc), "details": {}}},
         ) from exc
     return AccountOut.model_validate(account)
+
+
+@router.get("/me", response_model=AccountMeOut, summary="Профиль текущего аккаунта")
+def get_me(
+    claims: Annotated[AccountClaims, Depends(get_current_account)],
+    session: Annotated[Session, Depends(get_session)],
+) -> AccountMeOut:
+    """Идентификатор аккаунта и список групп шаринга, в которых он
+    состоит. В будущем сюда же добавится игровая статистика — тело
+    ответа расширится, отдельного эндпоинта под неё не будет."""
+    groups = [GroupOut.model_validate(g) for g in list_my_groups(session, claims.account_id)]
+    return AccountMeOut(id=claims.account_id, groups=groups)
 
 
 @router.post("/me/change-password", response_model=AccountOut, summary="Сменить пароль (FR-053)")
