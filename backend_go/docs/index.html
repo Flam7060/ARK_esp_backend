@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>ark_relay — AsyncAPI</title>
+  <link rel="stylesheet" href="https://unpkg.com/@asyncapi/react-component@1.4.10/styles/default.min.css">
+</head>
+<body>
+  <div id="asyncapi"></div>
+  <script src="https://unpkg.com/@asyncapi/react-component@1.4.10/browser/standalone/index.js"></script>
+  <script>
+    AsyncApiStandalone.render(
+      { schema: { url: '/docs/asyncapi.yaml' }, config: {} },
+      document.getElementById('asyncapi')
+    );
+  </script>
+</body>
+</html>

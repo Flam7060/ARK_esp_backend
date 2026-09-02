@@ -1,0 +1,17 @@
+# Secrets and generated keypairs -- never committed, deploy/deploy.sh
+# (re)generates them on the VPS. keys/.gitignore also covers *.pem;
+# duplicated here so the rule is visible at the repo root too.
+.env
+keys/*.pem
+
+# Go build output
+backend_go/relay
+backend_go/*.exe
+
+# Python (backend_python/.gitignore already covers __pycache__/.venv/etc
+# for that subtree; these two catch anything created at the repo root)
+__pycache__/
+.venv/
+
+# Editor/OS noise
+.DS_Store

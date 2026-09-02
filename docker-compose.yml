@@ -1,0 +1,93 @@
+x-jwt-public-key: &jwt_public_key /keys/jwt_public.pem
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:?DB_USER is required}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB: ${DB_NAME:?DB_NAME is required}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:?DB_USER is required}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend_python:
+    build: ./backend_python
+    ports:
+      - "${BACKEND_PYTHON_PORT:-8000}:8000"
+    environment:
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?APP_SECRET_KEY is required}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      SECURITY_PEPPER: ${SECURITY_PEPPER:?SECURITY_PEPPER is required}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_PRIMARY_HOST: postgres
+      DB_PRIMARY_PORT: 5432
+      DB_NAME: ${DB_NAME:?DB_NAME is required}
+      DB_USER: ${DB_USER:?DB_USER is required}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_PUBLIC_KEY_PATH: *jwt_public_key
+    volumes:
+      - ./keys:/keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request as u; u.urlopen('http://localhost:8000/healthz', timeout=2)\""]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  backend_go:
+    build: ./backend_go
+    ports:
+      - "${BACKEND_GO_PORT:-8081}:8081"
+      - "${BACKEND_GO_QUIC_PORT:-8443}:8443/udp"
+    environment:
+      RELAY_LISTEN_ADDR: ":8081"
+      # QUIC transport for arkmultitool's Http3Publisher (DTO-sharing plan
+      # — same protocol as the WS path, see internal/quicserver). No
+      # RELAY_TLS_CERT_FILE/KEY set here: cmd/relay falls back to an
+      # ephemeral self-signed dev cert, loudly logged — fine for local
+      # compose, never for a real deployment (mount a real cert/key pair
+      # via RELAY_TLS_CERT_FILE/RELAY_TLS_KEY_FILE instead).
+      RELAY_QUIC_LISTEN_ADDR: ":8443"
+      RELAY_REDIS_ADDR: "redis:6379"
+      RELAY_JWT_PUBLIC_KEY: *jwt_public_key
+      # Both empty -- cmd/relay falls back to an ephemeral self-signed cert
+      # every restart (see its own loud warning). Both set -- deploy/deploy.sh
+      # generates a real (long-lived, self-signed) keypair under ./keys on
+      # first run and points these at it, so QUIC actually has something
+      # stable for clients to pin against across restarts.
+      RELAY_TLS_CERT_FILE: ${RELAY_TLS_CERT_FILE:-}
+      RELAY_TLS_KEY_FILE: ${RELAY_TLS_KEY_FILE:-}
+    volumes:
+      - ./keys:/keys:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    # distroless-образ без shell/curl — TCP-проверка порта через встроенный
+    # /relay нет смысла городить; полагаемся на depends_on + restart.
+    restart: unless-stopped
+
+volumes:
+  pg_data:
