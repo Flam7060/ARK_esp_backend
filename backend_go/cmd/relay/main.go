@@ -18,6 +18,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"ark_relay/internal/apikeycache"
 	"ark_relay/internal/authjwt"
 	"ark_relay/internal/config"
 	"ark_relay/internal/hub"
@@ -25,6 +26,7 @@ import (
 	"ark_relay/internal/revocation"
 	"ark_relay/internal/store"
 	"ark_relay/internal/streamproducer"
+	"ark_relay/internal/tokenauth"
 	"ark_relay/internal/wsserver"
 )
 
@@ -65,7 +67,13 @@ func run(log *slog.Logger) error {
 	members := store.NewGroupMembership(rdb)
 	sp := streamproducer.New(rdb)
 	h := hub.New(log)
-	handler := wsserver.New(h, verifier, es, es, sp, members, log,
+	// resolver accepts either shape core/account_auth.py's
+	// get_current_account does on the HTTP side: an RS256 JWT (verifier,
+	// offline, no Redis) or a self-service api_key (apikeycache, one Redis
+	// GET, backed by the same rdb this process already holds -- see
+	// internal/tokenauth's package doc for why JWT is tried first).
+	resolver := tokenauth.New(verifier, apikeycache.New(rdb))
+	handler := wsserver.New(h, resolver, es, es, sp, members, log,
 		cfg.PingInterval, cfg.PongWait, cfg.WriteWait, cfg.MaxEntitiesPerMessage, cfg.MaxMessageBytes)
 
 	revocationCtx, stopRevocation := context.WithCancel(context.Background())
@@ -80,7 +88,7 @@ func run(log *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		qs := quicserver.New(h, verifier, es, es, sp, members, log,
+		qs := quicserver.New(h, resolver, es, es, sp, members, log,
 			cfg.PingInterval, cfg.PongWait, cfg.WriteWait, cfg.MaxEntitiesPerMessage, cfg.MaxMessageBytes)
 		go func() {
 			log.Info("ark_relay QUIC listening", "addr", cfg.QUICListenAddr)

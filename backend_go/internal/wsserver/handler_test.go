@@ -21,6 +21,7 @@ import (
 	"ark_relay/internal/authjwt"
 	"ark_relay/internal/hub"
 	"ark_relay/internal/store"
+	"ark_relay/internal/tokenauth"
 )
 
 // fakeGroupChecker answers IsMember from an in-memory set, so these tests
@@ -101,10 +102,15 @@ func signToken(t *testing.T, priv *rsa.PrivateKey, accountID string) string {
 func newTestHandler(t *testing.T, verifier *authjwt.Verifier, members *fakeGroupChecker) *Handler {
 	t.Helper()
 	h := hub.New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// keys=nil: none of these tests exercise the api_key fallback path
+	// (that's tokenauth's own test suite) -- a token that fails JWT
+	// verification is rejected outright, same behavior every one of these
+	// tests already expects.
+	resolver := tokenauth.New(verifier, nil)
 	// Upsert/hash-cache/publisher are never reached by the request paths
 	// under test (all rejected before Upgrade), so nil-ish no-op stand-ins
 	// are enough -- New only stores them, it doesn't call them itself.
-	return New(h, verifier, noopEntityWriter{}, noopHashCache{}, noopPublisher{}, members,
+	return New(h, resolver, noopEntityWriter{}, noopHashCache{}, noopPublisher{}, members,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		30*time.Second, 60*time.Second, 10*time.Second, 500, 64*1024)
 }

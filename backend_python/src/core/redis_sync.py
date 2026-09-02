@@ -1,9 +1,10 @@
-"""Синхронный Redis-клиент — только для `services/sharing_service.py`
-через `core/group_cache.RedisGroupCache`. Отдельный от `core/redis.py`
+"""Синхронный Redis-клиент — для `services/sharing_service.py`
+(`core/group_cache.RedisGroupCache`) и `services/api_key_service.py`
+(`core/api_key_cache.RedisApiKeyCache`). Отдельный от `core/redis.py`
 (async), которым пользуются стрим-консьюмеры (`main.py` lifespan) — эти
-роутеры (`routers/v1/groups.py`) обычные `def`, завязаны на синхронную
-SQLAlchemy `Session`, заворачивать их в async ради одного Redis-клиента
-не стоит."""
+роутеры (`routers/v1/groups.py`, `routers/v1/api_keys.py`) обычные `def`,
+завязаны на синхронную SQLAlchemy `Session`, заворачивать их в async ради
+одного Redis-клиента не стоит."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from collections.abc import Iterator
 
 import redis
 
+from core.api_key_cache import RedisApiKeyCache
 from core.config import config
 from core.group_cache import RedisGroupCache
 
@@ -29,5 +31,14 @@ def get_group_cache() -> Iterator[RedisGroupCache]:
     client = redis.Redis(connection_pool=get_sync_pool())
     try:
         yield RedisGroupCache(client)
+    finally:
+        client.close()
+
+
+def get_api_key_cache() -> Iterator[RedisApiKeyCache]:
+    """FastAPI-зависимость: клиент на запрос, соединение берётся из пула."""
+    client = redis.Redis(connection_pool=get_sync_pool())
+    try:
+        yield RedisApiKeyCache(client)
     finally:
         client.close()

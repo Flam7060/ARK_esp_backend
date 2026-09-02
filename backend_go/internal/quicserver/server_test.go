@@ -22,6 +22,7 @@ import (
 	"ark_relay/internal/hub"
 	"ark_relay/internal/protocol"
 	"ark_relay/internal/store"
+	"ark_relay/internal/tokenauth"
 )
 
 type fakeGroupChecker struct {
@@ -100,7 +101,10 @@ func startTestServer(t *testing.T, h *hub.Hub, verifier *authjwt.Verifier, membe
 	if err != nil {
 		t.Fatalf("generate dev tls config: %v", err)
 	}
-	s := New(h, verifier, noopEntityWriter{}, noopHashCache{}, noopPublisher{}, members,
+	// keys=nil: none of these tests exercise the api_key fallback path
+	// (that's tokenauth's own test suite).
+	resolver := tokenauth.New(verifier, nil)
+	s := New(h, resolver, noopEntityWriter{}, noopHashCache{}, noopPublisher{}, members,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		30*time.Second, 60*time.Second, 10*time.Second, 500, 64*1024)
 

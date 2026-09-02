@@ -11,8 +11,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from core.account_auth import AccountClaims, get_current_account
+from core.api_key_cache import RedisApiKeyCache
 from core.db import get_session
 from core.pagination import InvalidCursorError
+from core.redis_sync import get_api_key_cache
 from routers.v1.schemas.api_key import ApiKeyCreate, ApiKeyOut, ApiKeyPage
 from services.api_key_service import (
     DEFAULT_LIMIT,
@@ -43,10 +45,11 @@ def post_api_key(
     body: ApiKeyCreate,
     claims: Annotated[AccountClaims, Depends(get_current_account)],
     session: Annotated[Session, Depends(get_session)],
+    cache: Annotated[RedisApiKeyCache, Depends(get_api_key_cache)],
 ) -> ApiKeyOut:
     """Плейнтекст ключа виден только в этом ответе — в БД остаётся лишь
     его HMAC-SHA256 (см. core/tokens.py). Второго шанса прочитать его нет."""
-    api_key, token = create_api_key(session, claims.account_id, body)
+    api_key, token = create_api_key(session, claims.account_id, body, cache)
     out = ApiKeyOut.model_validate(api_key)
     return out.model_copy(update={"token": token})
 
@@ -86,12 +89,13 @@ def delete_api_key(
     key_id: UUID,
     claims: Annotated[AccountClaims, Depends(get_current_account)],
     session: Annotated[Session, Depends(get_session)],
+    cache: Annotated[RedisApiKeyCache, Depends(get_api_key_cache)],
 ) -> ApiKeyOut:
     """Не удаляет строку — переводит `status_code` в `revoked` (терминал).
     Идемпотентно вызывать повторно на уже отозванном ключе можно, второй
     вызов просто ничего не меняет."""
     try:
-        api_key = revoke_api_key(session, key_id, claims.account_id)
+        api_key = revoke_api_key(session, key_id, claims.account_id, cache)
     except NotFoundError as exc:
         raise _not_found(key_id) from exc
     return ApiKeyOut.model_validate(api_key)

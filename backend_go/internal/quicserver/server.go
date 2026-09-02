@@ -23,9 +23,9 @@ import (
 
 	"github.com/quic-go/quic-go"
 
-	"ark_relay/internal/authjwt"
 	"ark_relay/internal/hub"
 	"ark_relay/internal/streamproducer"
+	"ark_relay/internal/tokenauth"
 )
 
 // GroupChecker mirrors wsserver.GroupChecker — kept as its own interface
@@ -42,7 +42,7 @@ type GroupChecker interface {
 // checks, different transport.
 type Server struct {
 	hub      *hub.Hub
-	verifier *authjwt.Verifier
+	resolver *tokenauth.Resolver
 	store    hub.EntityWriter
 	hashes   hub.HashCache
 	stream   streamproducer.Publisher
@@ -59,12 +59,12 @@ type Server struct {
 // New builds a Server. Deadlines/limits are the same config values passed
 // to wsserver.New — one set of tuning knobs for both transports, not two
 // to keep in sync by hand.
-func New(h *hub.Hub, v *authjwt.Verifier, es hub.EntityWriter, hc hub.HashCache, sp streamproducer.Publisher,
+func New(h *hub.Hub, resolver *tokenauth.Resolver, es hub.EntityWriter, hc hub.HashCache, sp streamproducer.Publisher,
 	members GroupChecker, log *slog.Logger,
 	pingInterval, pongWait, writeWait time.Duration, maxEntities int, maxBytes int64,
 ) *Server {
 	return &Server{
-		hub: h, verifier: v, store: es, hashes: hc, stream: sp, members: members, log: log,
+		hub: h, resolver: resolver, store: es, hashes: hc, stream: sp, members: members, log: log,
 		pingInterval: pingInterval, pongWait: pongWait, writeWait: writeWait,
 		maxEntities: maxEntities, maxBytes: maxBytes,
 	}
@@ -164,21 +164,21 @@ func (s *Server) handshake(stream *quic.Stream) (accountID, groupID, serverIP st
 		return "", "", "", false
 	}
 
-	claims, err := s.verifier.Verify(req.Token)
+	accountID, err = s.resolver.Resolve(stream.Context(), req.Token)
 	if err != nil {
-		s.log.Warn("quicserver: jwt verify failed", "err", err)
+		s.log.Warn("quicserver: token resolve failed", "err", err)
 		s.reject(stream, "invalid token")
 		return "", "", "", false
 	}
 
-	member, err := s.members.IsMember(stream.Context(), req.GroupID, claims.AccountID)
+	member, err := s.members.IsMember(stream.Context(), req.GroupID, accountID)
 	if err != nil {
-		s.log.Error("quicserver: group membership check failed", "err", err, "account_id", claims.AccountID, "group_id", req.GroupID)
+		s.log.Error("quicserver: group membership check failed", "err", err, "account_id", accountID, "group_id", req.GroupID)
 		s.reject(stream, "membership check failed")
 		return "", "", "", false
 	}
 	if !member {
-		s.log.Warn("quicserver: connect refused: not a group member", "account_id", claims.AccountID, "group_id", req.GroupID)
+		s.log.Warn("quicserver: connect refused: not a group member", "account_id", accountID, "group_id", req.GroupID)
 		s.reject(stream, "not a member of this group")
 		return "", "", "", false
 	}
@@ -187,7 +187,7 @@ func (s *Server) handshake(stream *quic.Stream) (accountID, groupID, serverIP st
 		s.log.Warn("quicserver: handshake ack write failed", "err", err)
 		return "", "", "", false
 	}
-	return claims.AccountID, req.GroupID, req.ServerIP, true
+	return accountID, req.GroupID, req.ServerIP, true
 }
 
 func (s *Server) reject(stream *quic.Stream, reason string) {

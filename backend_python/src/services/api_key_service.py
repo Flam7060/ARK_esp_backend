@@ -9,6 +9,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from core.api_key_cache import ApiKeyCache
 from core.pagination import InvalidCursorError, decode_cursor, encode_cursor
 from core.tokens import generate_token, hash_token
 from models.api_key import ApiKey, ApiKeyScope
@@ -43,7 +44,9 @@ class NotFoundError(Exception):
     существования ключа."""
 
 
-def create_api_key(session: Session, account_id: UUID, data: ApiKeyCreate) -> tuple[ApiKey, str]:
+def create_api_key(
+    session: Session, account_id: UUID, data: ApiKeyCreate, cache: ApiKeyCache | None = None
+) -> tuple[ApiKey, str]:
     token = generate_token()
     api_key = ApiKey(
         account_id=account_id,
@@ -54,6 +57,13 @@ def create_api_key(session: Session, account_id: UUID, data: ApiKeyCreate) -> tu
     )
     api_key.scopes = [ApiKeyScope(scope=s) for s in dict.fromkeys(data.scopes)]  # dedup, порядок сохранён
     api_key_repo.insert(session, api_key)
+    if cache is not None:
+        # После insert — api_key.id уже проставлен autoincrement/default'ом
+        # (см. insert()'s session.refresh). Postgres остаётся источником
+        # истины даже если эта запись в Redis почему-то не удастся: ключ
+        # просто не заработает на relay-стороне (backend_go) до следующей
+        # попытки, HTTP-путь (routers/v1/api_keys.py) от Redis не зависит.
+        cache.set_key(token, api_key.id, account_id, api_key.expires_at)
     return api_key, token
 
 
@@ -81,7 +91,7 @@ def list_api_keys(
     return rows, next_cursor
 
 
-def revoke_api_key(session: Session, key_id: UUID, account_id: UUID) -> ApiKey:
+def revoke_api_key(session: Session, key_id: UUID, account_id: UUID, cache: ApiKeyCache | None = None) -> ApiKey:
     """Отзыв — не DELETE строки: `api_key_status.revoked` терминален
     (`is_terminal=True`), но исторический факт "такой ключ существовал и
     был отозван тогда-то" сохраняется, как и у `activation_key`."""
@@ -89,4 +99,8 @@ def revoke_api_key(session: Session, key_id: UUID, account_id: UUID) -> ApiKey:
     api_key.status_code = "revoked"
     session.commit()
     session.refresh(api_key)
+    if cache is not None:
+        # После commit, не до — если Postgres откатится, кэш в Redis не
+        # должен опустеть раньше самой записи о ревокации.
+        cache.delete_key(api_key.id)
     return api_key

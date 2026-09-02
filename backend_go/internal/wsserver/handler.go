@@ -12,9 +12,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"ark_relay/internal/authjwt"
 	"ark_relay/internal/hub"
 	"ark_relay/internal/streamproducer"
+	"ark_relay/internal/tokenauth"
 )
 
 // GroupChecker is the subset of *store.GroupMembership Handler depends on
@@ -28,7 +28,7 @@ type GroupChecker interface {
 // connections and hands them to the Hub.
 type Handler struct {
 	hub      *hub.Hub
-	verifier *authjwt.Verifier
+	resolver *tokenauth.Resolver
 	store    hub.EntityWriter
 	hashes   hub.HashCache
 	stream   streamproducer.Publisher
@@ -45,12 +45,12 @@ type Handler struct {
 
 // New builds a Handler. Deadlines and limits come from config, not
 // literals, so retuning them is a config edit.
-func New(h *hub.Hub, v *authjwt.Verifier, es hub.EntityWriter, hc hub.HashCache, sp streamproducer.Publisher,
+func New(h *hub.Hub, resolver *tokenauth.Resolver, es hub.EntityWriter, hc hub.HashCache, sp streamproducer.Publisher,
 	members GroupChecker, log *slog.Logger,
 	pingInterval, pongWait, writeWait time.Duration, maxEntities int, maxBytes int64,
 ) *Handler {
 	return &Handler{
-		hub: h, verifier: v, store: es, hashes: hc, stream: sp, members: members, log: log,
+		hub: h, resolver: resolver, store: es, hashes: hc, stream: sp, members: members, log: log,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
@@ -78,9 +78,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := h.verifier.Verify(token)
+	accountID, err := h.resolver.Resolve(r.Context(), token)
 	if err != nil {
-		h.log.Warn("jwt verify failed", "err", err, "remote", r.RemoteAddr)
+		h.log.Warn("token resolve failed", "err", err, "remote", r.RemoteAddr)
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
@@ -92,30 +92,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// account_id comes only from the verified JWT, never a query param —
-	// a caller can't connect "as" a different account just by knowing
-	// their group_id (see authjwt package doc for why group membership
-	// isn't itself a JWT claim).
-	member, err := h.members.IsMember(r.Context(), groupID, claims.AccountID)
+	// account_id comes only from the resolved token (JWT claim or api_key
+	// cache lookup), never a query param — a caller can't connect "as" a
+	// different account just by knowing their group_id (see authjwt
+	// package doc for why group membership isn't itself a JWT claim).
+	member, err := h.members.IsMember(r.Context(), groupID, accountID)
 	if err != nil {
-		h.log.Error("group membership check failed", "err", err, "account_id", claims.AccountID, "group_id", groupID)
+		h.log.Error("group membership check failed", "err", err, "account_id", accountID, "group_id", groupID)
 		http.Error(w, "membership check failed", http.StatusInternalServerError)
 		return
 	}
 	if !member {
-		h.log.Warn("connect refused: not a group member", "account_id", claims.AccountID, "group_id", groupID)
+		h.log.Warn("connect refused: not a group member", "account_id", accountID, "group_id", groupID)
 		http.Error(w, "not a member of this group", http.StatusForbidden)
 		return
 	}
 
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		h.log.Warn("websocket upgrade failed", "err", err, "account_id", claims.AccountID)
+		h.log.Warn("websocket upgrade failed", "err", err, "account_id", accountID)
 		return // Upgrade already wrote the HTTP error response itself
 	}
 
 	c := hub.NewClient(newWSConn(conn, h.maxBytes), h.hub, h.store, h.hashes, h.stream, h.log,
-		claims.AccountID, groupID, serverIP,
+		accountID, groupID, serverIP,
 		h.pingInterval, h.pongWait, h.writeWait, h.maxEntities)
 	c.Run(r.Context())
 }
