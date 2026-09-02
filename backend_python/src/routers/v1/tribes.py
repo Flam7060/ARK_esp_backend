@@ -22,15 +22,20 @@ from services.structure_query_service import DEFAULT_LIMIT, MAX_LIMIT, list_stru
 router = APIRouter(prefix="/v1/tribes", tags=["tribes"])
 
 
-@router.get("/{tribe_id}/structures", response_model=StructurePage)
+@router.get("/{tribe_id}/structures", response_model=StructurePage, summary="Постройки трайба")
 def get_structures(
     tribe_id: UUID,
     claims: Annotated[ClientClaims, Depends(get_current_client)],
     session: Annotated[Session, Depends(get_session)],
-    map_id: str | None = Query(default=None),
-    cursor: str | None = Query(default=None),
-    limit: int = Query(default=DEFAULT_LIMIT, gt=0, le=MAX_LIMIT),
+    map_id: str | None = Query(default=None, description="Ограничить одной картой (опционально)."),
+    cursor: str | None = Query(default=None, description="Курсор со страницы, полученной ранее."),
+    limit: int = Query(default=DEFAULT_LIMIT, gt=0, le=MAX_LIMIT, description="Размер страницы."),
 ) -> StructurePage:
+    """Список построек трайба, ранее загруженных через `POST
+    /v1/telemetry/structures`. `tribe_id` в пути должен совпадать с
+    `tribe_id` в токене клиента — доступа к чужому трайбу нет (403).
+    Постраничный вывод — курсорный: передайте `next_cursor` из
+    предыдущего ответа в `cursor`, чтобы получить следующую страницу."""
     if str(tribe_id) != claims.tribe_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

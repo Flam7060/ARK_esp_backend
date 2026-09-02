@@ -64,7 +64,8 @@ def post_group(
     session: Annotated[Session, Depends(get_session)],
     cache: Annotated[GroupCache, Depends(get_group_cache)],
 ) -> GroupOut:
-    """Создатель автоматически становится owner — не отдельным шагом."""
+    """Создаёт новую группу шаринга. Вызывающий аккаунт становится её
+    владельцем автоматически — отдельного шага для этого не требуется."""
     group = create_group(session, claims.account_id, body.name, cache)
     return GroupOut.model_validate(group)
 
@@ -74,6 +75,8 @@ def get_groups(
     claims: Annotated[AccountClaims, Depends(get_current_account)],
     session: Annotated[Session, Depends(get_session)],
 ) -> list[GroupOut]:
+    """Возвращает все группы, в которых текущий аккаунт состоит —
+    владельцем или обычным участником."""
     return [GroupOut.model_validate(g) for g in list_my_groups(session, claims.account_id)]
 
 
@@ -83,6 +86,10 @@ def get_group(
     claims: Annotated[AccountClaims, Depends(get_current_account)],
     session: Annotated[Session, Depends(get_session)],
 ) -> GroupOut:
+    """Доступна только участникам группы. Если группа не существует или
+    вызывающий аккаунт не её участник — 404 в обоих случаях, без
+    разделения: посторонний не должен узнать даже сам факт существования
+    чужой группы."""
     try:
         group = get_group_for_member(session, group_id, claims.account_id)
     except NotFoundError as exc:
@@ -97,6 +104,8 @@ def delete_group_by_id(
     session: Annotated[Session, Depends(get_session)],
     cache: Annotated[GroupCache, Depends(get_group_cache)],
 ) -> None:
+    """Удаляет группу целиком вместе со всеми участниками и активными
+    приглашениями. Доступно только владельцу группы."""
     try:
         delete_group(session, group_id, claims.account_id, cache)
     except NotFoundError as exc:
@@ -111,6 +120,8 @@ def get_group_members(
     claims: Annotated[AccountClaims, Depends(get_current_account)],
     session: Annotated[Session, Depends(get_session)],
 ) -> list[GroupMemberOut]:
+    """Список участников группы с их ролями. Доступна только участникам
+    самой группы."""
     try:
         members = list_members(session, group_id, claims.account_id)
     except NotFoundError as exc:
@@ -130,6 +141,10 @@ def delete_group_member(
     session: Annotated[Session, Depends(get_session)],
     cache: Annotated[GroupCache, Depends(get_group_cache)],
 ) -> None:
+    """Исключает участника из группы. Доступно только владельцу; убрать
+    самого себя этим эндпоинтом нельзя — для этого есть `POST
+    /{group_id}/leave` (обычному участнику) или `DELETE /{group_id}`
+    (владельцу, удаляет группу целиком)."""
     try:
         remove_member(session, group_id, claims.account_id, account_id, cache)
     except NotFoundError as exc:
@@ -148,8 +163,9 @@ def post_leave_group(
     session: Annotated[Session, Depends(get_session)],
     cache: Annotated[GroupCache, Depends(get_group_cache)],
 ) -> None:
-    """Owner выйти не может — см. `services.sharing_service
-    .OwnerCannotLeaveError`; удалить группу целиком — `DELETE /{group_id}`."""
+    """Убирает вызывающий аккаунт из группы. Владелец группы выйти этим
+    способом не может — чтобы отказаться от группы, владелец должен
+    удалить её целиком через `DELETE /{group_id}`."""
     try:
         leave_group(session, group_id, claims.account_id, cache)
     except NotFoundError as exc:
@@ -173,6 +189,11 @@ def post_group_invite(
     claims: Annotated[AccountClaims, Depends(get_current_account)],
     session: Annotated[Session, Depends(get_session)],
 ) -> GroupInviteOut:
+    """Создаёт токен приглашения в группу — одноразовый или многоразовый
+    (`max_uses`), с необязательным сроком действия (`expires_at`).
+    Плейнтекст токена возвращается только в этом ответе — сохраните его
+    сразу, повторно получить не получится. Доступно только владельцу
+    группы."""
     try:
         invite, token = create_invite(session, group_id, claims.account_id, body)
     except NotFoundError as exc:
@@ -190,6 +211,10 @@ def post_join_group(
     session: Annotated[Session, Depends(get_session)],
     cache: Annotated[GroupCache, Depends(get_group_cache)],
 ) -> GroupOut:
+    """Вступает в группу по токену приглашения, полученному от владельца
+    группы. Отклоняется, если токен неизвестен, просрочен, отозван или
+    уже исчерпал лимит использований (422), либо если вызывающий
+    аккаунт уже состоит в этой группе (409)."""
     try:
         member = join_group(session, claims.account_id, body.token, cache)
     except InvalidInviteError as exc:

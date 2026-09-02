@@ -25,10 +25,11 @@ router = APIRouter(prefix="/v1/accounts/auth", tags=["Account Auth"])
 
 @router.post("/login", response_model=AccountLoginResponse, summary="Логин account'а")
 def login(body: AccountLoginRequest, session: Annotated[Session, Depends(get_session)]) -> AccountLoginResponse:
-    """Проверяет логин/пароль, считает подряд неудачные попытки и временно
-    блокирует учётку после порога (см. `core.account_auth
-    .FAILED_ATTEMPTS_LOCKOUT_THRESHOLD`). Успех — HS256 JWT; передавать
-    дальше как `Authorization: Bearer <access_token>`."""
+    """Логин по `login` + `password`. После нескольких неудачных попыток
+    подряд учётка временно блокируется (423, с указанием времени
+    разблокировки). Успех — JWT-токен; передавайте его дальше как
+    `Authorization: Bearer <access_token>` на все account-only
+    эндпоинты."""
     try:
         account = authenticate_account(session, body.login, body.password)
     except AccountLockedError as exc:

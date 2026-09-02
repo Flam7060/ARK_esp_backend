@@ -42,11 +42,11 @@ router = APIRouter(prefix="/v1/accounts", tags=["Accounts"])
 def post_register(
     body: AccountRegisterRequest, session: Annotated[Session, Depends(get_session)]
 ) -> AccountOut:
-    """Требует login, password и activation_key одновременно. Ключ
-    проверяется и гасится атомарно (issued -> redeemed, `FOR UPDATE`) в
-    той же транзакции, что создаёт account — см. services/account_service
-    .register_account. `expires_at` нового аккаунта = сейчас + `duration`
-    ключа."""
+    """Регистрирует новый аккаунт по `login`, `password` и валидному
+    `activation_key`. Ключ можно использовать только один раз — после
+    успешной регистрации он становится непригодным для повторного
+    использования. Срок действия аккаунта отсчитывается от момента
+    регистрации на длительность, зашитую в ключ."""
     try:
         account = register_account(session, body)
     except InvalidActivationKeyError as exc:
@@ -68,10 +68,10 @@ def post_change_password(
     claims: Annotated[AccountClaims, Depends(get_current_account)],
     session: Annotated[Session, Depends(get_session)],
 ) -> AccountOut:
-    """Требует валидный JWT account'а И текущий пароль — токен один
-    доказывает только "кто-то вошёл раньше", старый пароль подтверждает,
-    что это делает хозяин пароля, а не тот, кто украл ещё не истёкший
-    токен."""
+    """Меняет пароль текущего аккаунта. Требует не только валидный JWT,
+    но и текущий пароль — токен доказывает лишь то, что вход когда-то
+    выполнен, а старый пароль подтверждает, что запрос делает хозяин
+    аккаунта, а не тот, кто перехватил ещё не истёкший токен."""
     try:
         account = change_password(session, claims.account_id, body)
     except InvalidOldPasswordError as exc:
@@ -90,10 +90,11 @@ def post_change_password(
 def post_password_reset_confirm(
     body: PasswordResetConfirmRequest, session: Annotated[Session, Depends(get_session)]
 ) -> None:
-    """Публично, без токена аутентификации — сам токен сброса ЭТО и есть
-    доказательство права сменить пароль (выпущен админом, см.
-    `POST /v1/admin/accounts/{account_id}/password-reset-tokens`).
-    Погашается ровно один раз (`FOR UPDATE`), TTL — 1 час."""
+    """Публичный эндпоинт, токена аутентификации не требует — сам токен
+    сброса и есть доказательство права сменить пароль (его выпускает
+    администратор через `POST /v1/admin/accounts/{account_id}
+    /password-reset-tokens` и передаёт пользователю отдельным каналом).
+    Токен одноразовый, действует 1 час с момента выпуска."""
     try:
         confirm_reset(session, body.token, body.new_password)
     except InvalidResetTokenError as exc:

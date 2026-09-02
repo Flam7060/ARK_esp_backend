@@ -35,12 +35,12 @@ def post_password_reset_token(
     claims: Annotated[AdminClaims, Depends(get_current_admin)],
     session: Annotated[Session, Depends(get_session)],
 ) -> PasswordResetIssueOut:
-    """Админ НЕ задаёт и не видит новый пароль — только выпускает
-    одноразовый токен с TTL (`services.password_reset_service
-    .RESET_TOKEN_TTL`) и передаёт его пользователю сам, вне этого API
-    (саппорт-канал). Пользователь подтверждает токен и ставит пароль сам
-    через `POST /v1/accounts/password-reset/confirm`. Выпуск логируется
-    (кто, кому, когда) — см. services/password_reset_service.py."""
+    """Выпускает одноразовый токен сброса пароля для указанного аккаунта.
+    Администратор не задаёт и не видит новый пароль — только передаёт
+    этот токен пользователю отдельным каналом (вне API); сам пользователь
+    подтверждает токен и ставит новый пароль через `POST
+    /v1/accounts/password-reset/confirm`. Токен действует ограниченное
+    время, указанное в ответе."""
     try:
         row, token = issue_reset_token(session, account_id, claims.admin_id)
     except AccountNotFoundError as exc:

@@ -46,12 +46,21 @@ def _validation_error_code(exc: ValidationError) -> str:
     return msg[len(prefix):] if msg.startswith(prefix) else "invalid_item"
 
 
-@router.post("/structures", response_model=SnapshotResult)
+@router.post("/structures", response_model=SnapshotResult, summary="Загрузить снимок построек трайба")
 async def post_structures(
     body: Annotated[dict[str, Any], Body(...)],
     claims: Annotated[ClientClaims, Depends(get_current_client)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> SnapshotResult:
+    """Принимает пачку построек, увиденных клиентом в игре
+    (`kind: "structures"` — единственный поддерживаемый вид снимка).
+    Каждый элемент валидируется независимо: если часть элементов не
+    прошла проверку, они попадают в `rejected` с кодом причины, а
+    остальные всё равно принимаются — весь снимок целиком отклоняется
+    только если сломан сам конверт (`snapshot_id`/`client_id`/`tribe_id`/
+    `kind`/`items` отсутствуют или не того типа) либо `tribe_id`/
+    `client_id` не совпадают с токеном. Повторная отправка уже принятого
+    `snapshot_id` не создаёт дублей — ответ идентичен первому разу."""
     # Конверт разбирается вручную (не единой pydantic-моделью на всё тело),
     # потому что §6 требует разного поведения на двух уровнях брака:
     # плохой envelope/подпись -> весь снимок отклоняется (FR-9), плохой

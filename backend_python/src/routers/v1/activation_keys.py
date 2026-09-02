@@ -64,10 +64,11 @@ def _not_found(key_id: UUID) -> HTTPException:
 def post_activation_key(
     body: ActivationKeyCreate, session: Annotated[Session, Depends(get_session)]
 ) -> ActivationKeyOut:
-    """Генерирует случайный токен (256 бит энтропии), кладёт в БД только
-    его SHA-256 (`token_hash`), а плейнтекст возвращает в поле `token`
-    ЭТОГО ответа и больше нигде — ни `GET`, ни `PATCH` его не покажут.
-    Отдай токен покупателю сразу же: второго шанса прочитать его нет."""
+    """Выпускает новый ключ активации для последующей регистрации
+    аккаунта (`POST /v1/accounts/register`). Плейнтекст ключа возвращается
+    только в поле `token` этого ответа — ни `GET`, ни `PATCH` его больше
+    не покажут. Передайте его получателю сразу: второго шанса прочитать
+    его нет."""
     try:
         activation_key, token = create_activation_key(session, body)
     except ConflictError as exc:
@@ -88,10 +89,10 @@ def get_activation_keys(
     cursor: str | None = Query(default=None, description="Курсор со страницы, полученной ранее."),
     limit: int = Query(default=DEFAULT_LIMIT, gt=0, le=MAX_LIMIT, description="Размер страницы."),
 ) -> ActivationKeyPage:
-    """Курсорная пагинация (не offset/limit — растущая таблица не даёт
-    offset'у согласованных страниц между запросами), сортировка по
-    `created_at` убыванием. `token` в списке всегда `null` — плейнтекст
-    виден только один раз, в ответе на создание."""
+    """Список ключей активации, новые сначала. Постраничный вывод —
+    курсорный: передайте `next_cursor` из предыдущего ответа в `cursor`,
+    чтобы получить следующую страницу. `token` в списке всегда `null` —
+    плейнтекст виден только один раз, в ответе на создание."""
     try:
         rows, next_cursor = list_activation_keys(session, cursor, limit)
     except InvalidCursorError as exc:
@@ -106,7 +107,8 @@ def get_activation_keys(
 def get_activation_key_by_id(
     key_id: UUID, session: Annotated[Session, Depends(get_session)]
 ) -> ActivationKeyOut:
-    """`token` в ответе всегда `null` — см. docstring `post_activation_key`."""
+    """Метаданные одного ключа активации по id. `token` в ответе всегда
+    `null` — плейнтекст виден только один раз, в ответе на создание."""
     try:
         activation_key = get_activation_key(session, key_id)
     except NotFoundError as exc:

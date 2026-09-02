@@ -47,8 +47,11 @@ def post_api_key(
     session: Annotated[Session, Depends(get_session)],
     cache: Annotated[RedisApiKeyCache, Depends(get_api_key_cache)],
 ) -> ApiKeyOut:
-    """Плейнтекст ключа виден только в этом ответе — в БД остаётся лишь
-    его HMAC-SHA256 (см. core/tokens.py). Второго шанса прочитать его нет."""
+    """Создаёт новый API-ключ для текущего аккаунта с указанными scopes.
+    Плейнтекст ключа возвращается только в этом ответе — сохраните его
+    сразу, повторно получить не получится. Ключ можно передавать в
+    заголовке `Authorization: Bearer <key>` вместо JWT — например, если
+    клиенту не выдавали токен при запуске."""
     api_key, token = create_api_key(session, claims.account_id, body, cache)
     out = ApiKeyOut.model_validate(api_key)
     return out.model_copy(update={"token": token})
@@ -61,6 +64,9 @@ def get_api_keys(
     cursor: str | None = Query(default=None),
     limit: int = Query(default=DEFAULT_LIMIT, gt=0, le=MAX_LIMIT),
 ) -> ApiKeyPage:
+    """Список API-ключей текущего аккаунта, новые сначала. Плейнтекст
+    ключа в списке не показывается — только `prefix`/`last4` для
+    опознавания, он виден целиком лишь один раз, в ответе на создание."""
     try:
         rows, next_cursor = list_api_keys(session, claims.account_id, cursor, limit)
     except InvalidCursorError as exc:
@@ -77,6 +83,9 @@ def get_api_key_by_id(
     claims: Annotated[AccountClaims, Depends(get_current_account)],
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiKeyOut:
+    """Метаданные одного API-ключа текущего аккаунта. Плейнтекст ключа
+    здесь не возвращается — он показывается только один раз, в ответе на
+    создание."""
     try:
         api_key = get_api_key(session, key_id, claims.account_id)
     except NotFoundError as exc:
@@ -91,9 +100,9 @@ def delete_api_key(
     session: Annotated[Session, Depends(get_session)],
     cache: Annotated[RedisApiKeyCache, Depends(get_api_key_cache)],
 ) -> ApiKeyOut:
-    """Не удаляет строку — переводит `status_code` в `revoked` (терминал).
-    Идемпотентно вызывать повторно на уже отозванном ключе можно, второй
-    вызов просто ничего не меняет."""
+    """Отзывает ключ — он перестаёт быть валидным немедленно и
+    необратимо. Идемпотентно: повторный вызов на уже отозванном ключе
+    ничего не меняет и не возвращает ошибку."""
     try:
         api_key = revoke_api_key(session, key_id, claims.account_id, cache)
     except NotFoundError as exc:
