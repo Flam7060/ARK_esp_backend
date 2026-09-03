@@ -131,6 +131,13 @@ type Entity struct {
 	MaxHealth float64     `json:"max_health,omitempty"`
 	HeldItem  string      `json:"held_item,omitempty"`
 	Turret    *TurretInfo `json:"turret,omitempty"`
+	// StableID is the client's linked_player_data_id, set only for
+	// Cat == CategoryPlayer (kopt::share::Sighting::stable_id is 0 for
+	// every other category -- no such id exists in game memory for
+	// dino/structure/turret). Not a real platform/Steam id -- see
+	// streamproducer.PlayerFields' own doc comment on why this is what's
+	// available today and how it's used downstream.
+	StableID uint64 `json:"stable_id,omitempty"`
 }
 
 // Validate rejects an Entity that would corrupt the Redis live-view if
@@ -177,6 +184,21 @@ type Inbound struct {
 	// this can't be inferred from AccountID alone; the client is the only
 	// side that knows it.
 	ReporterCharacterID string `json:"reporter_character_id,omitempty"`
+	// ReporterX/Y/Z is the reporter's own world position at the time of
+	// this batch, paired with ReporterCharacterID above -- both optional,
+	// both informational only (never used for authorization; account_id
+	// from the verified token remains the sole trust boundary). Lets
+	// receivers dedup a whole batch from a teammate who's already in view
+	// range instead of redrawing the same base twice (see arkmultitool's
+	// kopt::share::ReporterFilter, the actual consumer on the client side).
+	// Zero (the unset default) reads as "position unknown" -- indistinguishable
+	// from a genuine origin-adjacent position, but no real ARK map
+	// coordinate lands there, so the only real-world effect of an
+	// old/non-participating client omitting these is "never deduped",
+	// never silent data loss.
+	ReporterX float64 `json:"reporter_x,omitempty"`
+	ReporterY float64 `json:"reporter_y,omitempty"`
+	ReporterZ float64 `json:"reporter_z,omitempty"`
 	// Vanished lists Entity.Key values the client no longer sees that it
 	// did see in a previous batch -- an explicit "this is gone" signal
 	// (kopt::share::ChangeFilter::collect_vanished on the C++ side),
@@ -216,10 +238,21 @@ func (m Inbound) Validate(maxEntities int) error {
 // client's group room (same group_id, same server_ip), or a keepalive
 // frame.
 type Outbound struct {
-	Type       MsgType  `json:"type"`
-	ReportedBy string   `json:"reported_by,omitempty"`
-	RelayedAt  string   `json:"relayed_at,omitempty"`
-	Entities   []Entity `json:"entities,omitempty"`
+	Type MsgType `json:"type"`
+	// ReportedBy is the verified account_id from the sender's token --
+	// the only trust-relevant identity field here, resolved server-side
+	// (hub.Client.AccountID), never client-declared.
+	ReportedBy string `json:"reported_by,omitempty"`
+	// ReporterCharacterID/ReporterX/Y/Z are the Inbound fields of the same
+	// name, forwarded through unchanged (see Inbound.ReporterCharacterID's
+	// own doc comment) -- client-declared, informational only, never used
+	// for authorization or room routing, distinct from ReportedBy above.
+	ReporterCharacterID string   `json:"reporter_character_id,omitempty"`
+	ReporterX           float64  `json:"reporter_x,omitempty"`
+	ReporterY           float64  `json:"reporter_y,omitempty"`
+	ReporterZ           float64  `json:"reporter_z,omitempty"`
+	RelayedAt           string   `json:"relayed_at,omitempty"`
+	Entities            []Entity `json:"entities,omitempty"`
 }
 
 // Decode parses one WebSocket text frame into an Inbound message.

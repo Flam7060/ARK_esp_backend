@@ -223,6 +223,8 @@ func (c *Client) handleSighting(ctx context.Context, msg protocol.Inbound) {
 
 	out := protocol.Outbound{
 		Type: protocol.MsgSighting, ReportedBy: c.AccountID,
+		ReporterCharacterID: msg.ReporterCharacterID,
+		ReporterX:           msg.ReporterX, ReporterY: msg.ReporterY, ReporterZ: msg.ReporterZ,
 		RelayedAt: now.Format(time.RFC3339Nano), Entities: msg.Entities,
 	}
 	payload, err := protocol.Encode(out)
@@ -233,14 +235,26 @@ func (c *Client) handleSighting(ctx context.Context, msg protocol.Inbound) {
 	c.hub.Broadcast(c.GroupID, c.ServerIP, payload, c)
 }
 
-// maybeStream is the dedup gate (DTO-sharing plan §2): players never reach
-// the durable stream at all (see streamproducer.StreamNameFor); everything
-// else only does when its content hash changed since the last Publish, or
-// the keyframe elapsed — never on every tick, since that's exactly the
-// Redis-Stream-flooding the gate exists to avoid.
+// maybeStream is the dedup gate (DTO-sharing plan §2): fires only when an
+// entity's content hash changed since the last Publish, or the keyframe
+// elapsed — never on every tick, since that's exactly the Redis-Stream-
+// flooding the gate exists to avoid. Players go through the same gate as
+// everything else (streamproducer.StreamNameFor routes CategoryPlayer to
+// ark:stream:player_sighting), just with an extra identity guard below
+// and a different XADD field shape (PlayerFields, not EntityFields).
 func (c *Client) maybeStream(ctx context.Context, e protocol.Entity, now time.Time, reporterCharacterID string) {
 	stream := streamproducer.StreamNameFor(e.Cat)
 	if stream == "" {
+		return
+	}
+	// A player entity with no StableID has no identity for Postgres's
+	// player.platform_id (NOT NULL, non-blank) to key on -- publishing it
+	// would either fail PlayerSighting's blank-check downstream or, worse,
+	// succeed with platform_id="0" and silently merge every unidentified
+	// sighting into one bogus shared row. Drop it here, same "not enough
+	// data to record" call as get_or_create_tribe makes for a blank
+	// tribe_name.
+	if e.Cat == protocol.CategoryPlayer && e.StableID == 0 {
 		return
 	}
 
@@ -258,7 +272,12 @@ func (c *Client) maybeStream(ctx context.Context, e protocol.Entity, now time.Ti
 		return
 	}
 
-	fields := streamproducer.EntityFields(e, newHash, c.ServerIP, now, c.AccountID, reporterCharacterID)
+	var fields map[string]string
+	if e.Cat == protocol.CategoryPlayer {
+		fields = streamproducer.PlayerFields(e, c.ServerIP, now, c.AccountID)
+	} else {
+		fields = streamproducer.EntityFields(e, newHash, c.ServerIP, now, c.AccountID, reporterCharacterID)
+	}
 	if pubErr := c.stream.Publish(ctx, stream, fields); pubErr != nil {
 		c.log.Warn("stream publish failed", "key", e.Key, "stream", stream, "err", pubErr)
 		return // don't record a hash for a publish that never happened

@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"sync"
@@ -182,17 +183,49 @@ func TestMaybeStream_ChangedPositionPublishesImmediately(t *testing.T) {
 	}
 }
 
-func TestMaybeStream_PlayersNeverPublish(t *testing.T) {
+func TestMaybeStream_PlayerWithoutStableIDNeverPublishes(t *testing.T) {
 	store := &fakeEntityWriter{}
 	hashes := newFakeHashCache()
 	pub := &fakePublisher{}
 	c := newTestClient(store, hashes, pub)
 
+	// No StableID -- nothing to key player.platform_id on, must be
+	// dropped rather than publish a bogus platform_id="0" row.
 	e := protocol.Entity{Cat: protocol.CategoryPlayer, Key: "player:steve:42", Label: "Steve", Team: 42}
 	c.maybeStream(context.Background(), e, time.Now(), "")
 
 	if got := pub.count(); got != 0 {
-		t.Fatalf("expected players to never reach the stream, got %d publishes", got)
+		t.Fatalf("expected a player entity with no StableID to never reach the stream, got %d publishes", got)
+	}
+}
+
+func TestMaybeStream_PlayerWithStableIDPublishesToPlayerStream(t *testing.T) {
+	store := &fakeEntityWriter{}
+	hashes := newFakeHashCache()
+	pub := &fakePublisher{}
+	c := newTestClient(store, hashes, pub)
+
+	e := protocol.Entity{
+		Cat: protocol.CategoryPlayer, Key: "player:steve:42", Label: "Steve", Team: 42,
+		X: 100, Y: 200, Z: 300, StableID: 555,
+	}
+	c.maybeStream(context.Background(), e, time.Now(), "")
+
+	if got := pub.count(); got != 1 {
+		t.Fatalf("expected exactly 1 publish for a player with a StableID, got %d", got)
+	}
+	call := pub.last()
+	if call.stream != "ark:stream:player_sighting" {
+		t.Fatalf("expected player entity to route to the player stream, got %q", call.stream)
+	}
+	if call.fields["platform_id"] != "555" {
+		t.Fatalf("expected platform_id=555, got fields=%v", call.fields)
+	}
+	if call.fields["character_name"] != "Steve" {
+		t.Fatalf("expected character_name=Steve, got fields=%v", call.fields)
+	}
+	if _, hasObjectHash := call.fields["object_hash"]; hasObjectHash {
+		t.Fatalf("player fields must not carry structure/dino-shaped object_hash, got fields=%v", call.fields)
 	}
 }
 
@@ -240,6 +273,53 @@ func TestHandleSighting_UpsertsAlwaysHappenRegardlessOfDedup(t *testing.T) {
 	}
 	if got := pub.count(); got != 1 {
 		t.Fatalf("expected the stream to be deduped on the second identical tick, got %d publishes", got)
+	}
+}
+
+func TestHandleSighting_ForwardsReporterIdentityAndPosition(t *testing.T) {
+	store := &fakeEntityWriter{}
+	hashes := newFakeHashCache()
+	pub := &fakePublisher{}
+	h := New(testLogger())
+
+	sender := newTestClient(store, hashes, pub)
+	sender.hub = h
+	h.Register(sender)
+	defer h.Unregister(sender)
+
+	// newTestClient doesn't init send (only NewClient does) -- a nil
+	// channel is never selectable, so Broadcast would just drop this
+	// client via closeSlow() instead of actually delivering anything to
+	// read back.
+	receiver := newTestClient(store, hashes, pub)
+	receiver.AccountID = "acct-2"
+	receiver.send = make(chan []byte, 4)
+	h.Register(receiver)
+	defer h.Unregister(receiver)
+
+	e := structureEntity(100, 200, 300)
+	msg := protocol.Inbound{
+		Type: protocol.MsgSighting, Entities: []protocol.Entity{e},
+		ReporterCharacterID: "42", ReporterX: 10, ReporterY: 20, ReporterZ: 30,
+	}
+	fillComputedKeys(msg.Entities)
+	sender.handleSighting(context.Background(), msg)
+
+	select {
+	case raw := <-receiver.send:
+		var out protocol.Outbound
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("failed to decode broadcast payload: %v", err)
+		}
+		if out.ReporterCharacterID != "42" {
+			t.Fatalf("expected ReporterCharacterID to be forwarded, got %q", out.ReporterCharacterID)
+		}
+		if out.ReporterX != 10 || out.ReporterY != 20 || out.ReporterZ != 30 {
+			t.Fatalf("expected reporter position to be forwarded, got (%v,%v,%v)",
+				out.ReporterX, out.ReporterY, out.ReporterZ)
+		}
+	default:
+		t.Fatal("expected a broadcast to reach the second client registered in the same room")
 	}
 }
 
