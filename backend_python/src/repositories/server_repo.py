@@ -75,20 +75,43 @@ def get_or_create_server_by_ip(session: Session, server_ip: str) -> Server:
     return server
 
 
-def get_or_create_tribe(session: Session, server_id: uuid.UUID, tribe_name: str | None) -> Tribe | None:
+def get_or_create_tribe(
+    session: Session, server_id: uuid.UUID, tribe_name: str | None, ark_tribe_id: int | None = None
+) -> Tribe | None:
     """None, когда tribe_name не пришёл -- анклеймленная/неизвестная
     принадлежность остаётся NULL (tribe_id nullable на ark_structure/
-    tamed_dino), а не привязывается к выдуманному племени."""
+    tamed_dino), а не привязывается к выдуманному племени.
+
+    ark_tribe_id -- настоящий числовой ARK TargetingTeam/TribeID, когда
+    отправитель его знает (Entity.Team на проводе; 0/отрицательный трактуется
+    как "неизвестен", как для клиентов, которые его вообще не шлют). Когда
+    задан -- приоритетный ключ поиска: имя трайбы меняется (переименование
+    в игре), team-id для владельца не меняется, а uq_tribe_server_name
+    держит уникальность по (server_id, name), не по id -- поиск сперва по
+    id, потом фоллбек на имя, не наоборот, иначе переименованная трайба
+    задвоится вместо переиспользования старой строки."""
     if not tribe_name:
         return None
+    has_id = ark_tribe_id is not None and ark_tribe_id > 0
+
+    if has_id:
+        tribe = session.execute(
+            select(Tribe).where(Tribe.server_id == server_id, Tribe.ark_tribe_id == ark_tribe_id)
+        ).scalar_one_or_none()
+        if tribe is not None:
+            if tribe.name != tribe_name:
+                tribe.name = tribe_name  # трайба переименовалась в игре
+            return tribe
 
     tribe = session.execute(
         select(Tribe).where(Tribe.server_id == server_id, Tribe.name == tribe_name)
     ).scalar_one_or_none()
     if tribe is not None:
+        if has_id and tribe.ark_tribe_id is None:
+            tribe.ark_tribe_id = ark_tribe_id  # legacy-строка без id, дошёл настоящий -- backfill
         return tribe
 
-    tribe = Tribe(server_id=server_id, name=tribe_name)
+    tribe = Tribe(server_id=server_id, name=tribe_name, ark_tribe_id=ark_tribe_id if has_id else None)
     session.add(tribe)
     try:
         session.flush()

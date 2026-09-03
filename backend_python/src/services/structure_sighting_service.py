@@ -110,7 +110,7 @@ def ingest_structure_sighting(session: Session, sighting: StructureSighting) -> 
     is_turret = sighting.turret_ammo is not None or sighting.turret_range is not None or sighting.turret_powered is not None
     structure_class = ark_lookups_repo.get_or_create_structure_class(session, sighting.class_code, is_turret=is_turret)
 
-    tribe = server_repo.get_or_create_tribe(session, server.id, sighting.tribe_name)
+    tribe = server_repo.get_or_create_tribe(session, server.id, sighting.tribe_name, ark_tribe_id=sighting.team)
 
     reported_by = uuid.UUID(sighting.reported_by_account_id) if sighting.reported_by_account_id else None
     observed_at = sighting.observed_at or datetime.now(UTC)

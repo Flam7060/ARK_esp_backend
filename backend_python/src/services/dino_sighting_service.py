@@ -29,6 +29,7 @@ class DinoSighting(BaseModel):
     object_hash: str
     class_: str | None = None  # alias would collide with Python's "class" keyword; set manually below
     tribe_name: str | None = None
+    team: int | None = None
     x: float | None = None
     y: float | None = None
     z: float | None = None
@@ -70,7 +71,7 @@ def ingest_dino_sighting(session: Session, sighting: DinoSighting) -> None:
 
     server = server_repo.get_or_create_server_by_ip(session, sighting.server_ip)
     species = ark_lookups_repo.get_or_create_species(session, sighting.class_)
-    tribe = server_repo.get_or_create_tribe(session, server.id, sighting.tribe_name)
+    tribe = server_repo.get_or_create_tribe(session, server.id, sighting.tribe_name, ark_tribe_id=sighting.team)
 
     reported_by = uuid.UUID(sighting.reported_by_account_id) if sighting.reported_by_account_id else None
     observed_at = sighting.observed_at or datetime.now(UTC)
