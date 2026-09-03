@@ -3,55 +3,62 @@ info:
   title: ark_relay live sighting channel
   version: 2.0.0
   description: >
-    WebSocket-протокол обмена ESP-сайтингами между клиентами одной группы
-    (sharing group — реальные тиммейты, не игровой ARK-трайб) на одном
-    игровом сервере. Ручная спека — в отличие от OpenAPI на backend_python
-    (генерируется из кода FastAPI на каждый запрос /openapi.json), тут нет
-    автогена из Go: правишь internal/protocol/message.go — правь и этот
-    файл тем же PR-ом, иначе спека молча разъедется с реальным протоколом.
-    См. также docker-compose.yml/backend_python/docs/telemetry-api-v1.md §7.3.
+    QUIC-протокол обмена ESP-сайтингами внутри sharing group (не
+    ARK-трайб) на одном сервере. Ручная спека — правишь
+    internal/protocol/message.go, правь и её тем же PR-ом. См. также
+    backend_python/docs/telemetry-api-v1.md §7.3.
 
-    v2: раздача переведена с игрового tribe_id на пару (sharing group,
-    server_ip) — см. §7 обновлённого telemetry-api-v1.md. JWT сократился до
-    одного claim (account_id); категории расширены структурами/турелями;
-    Entity/Inbound получили новые поля для этого и для дедуп-потока в
-    Postgres (внутренний механизм, самого потока в этом канале не видно).
+    v2: раздача по (sharing group, server_ip) вместо tribe_id; JWT — один
+    claim account_id; добавлены структуры/турели.
 
-    v3: group_id ушёл из хендшейка. Группа больше не параметр, который
-    указывает клиент — relay резолвит её сам по account_id (одна активная
-    группа на аккаунт, account.active_group_id в backend_python,
-    зеркалится в Redis ark:account:{account_id}:active_group). Клиент,
-    у которого нет активной группы, получает 403 при хендшейке.
+    v3: group_id ушёл из хендшейка — relay резолвит активную группу сам по
+    account_id (account.active_group_id, зеркало в Redis). Нет активной
+    группы — 403.
+
+    v4: reporter_character_id/reporter_x/y/z теперь и в исходящем
+    сообщении (были только во входящем). Entity.stable_id — включает
+    публикацию player в ark:stream:player_sighting (раньше не публиковался).
+
+    v5: WebSocket-транспорт удалён, QUIC остался единственным — спека
+    описывает его. JSON-контракт сообщений не менялся: он с самого начала
+    был общим для обоих транспортов. Изменилось обрамление: вместо
+    HTTP-апгрейда и WS-фреймов — один bidi-стрим с 4-байтным префиксом
+    длины и явным handshake-фреймом вместо заголовков/query.
 
 servers:
   relay:
-    host: 'localhost:8081'
-    protocol: wss
-    description: ark_relay WebSocket endpoint
+    host: 'localhost:8443'
+    protocol: quic
+    description: >
+      Bare QUIC (не HTTP/3), UDP. ALPN 'ark-quic-v1', TLS 1.3 обязателен —
+      QUIC без него не бывает, plaintext-варианта нет. Клиент пинит
+      сертификат релея (deploy/deploy.sh генерит долгоживущий self-signed);
+      без RELAY_TLS_CERT_FILE релей поднимает эфемерный self-signed на
+      процесс — годится только для локальной разработки.
 
 defaultContentType: application/json
 
 channels:
   sighting:
-    address: /v1/relay/ws
+    address: null
     description: >
-      Один WS-коннект на клиента. Authorization: Bearer <jwt> заголовком
-      (нативный Go-клиент) или ?token=<jwt> query-параметром (браузер —
-      WebSocket API не даёт ставить заголовки на handshake). Handshake
-      дополнительно требует query-параметр server_ip — обязателен, коннект
-      без него отклоняется 400 ещё до проверки токена. Группа клиентом не
-      передаётся: relay резолвит текущую активную группу account_id (из
-      JWT/API-key) сам через Redis ark:account:{account_id}:active_group,
-      зеркало backend_python's account.active_group_id. Нет активной
-      группы — 403. Кик/выход/удаление группы или смена активной группы
-      рвёт уже открытое соединение почти сразу через отдельный Redis
-      Pub/Sub-канал (не часть этого WS-канала).
-    parameters:
-      server_ip:
-        description: >-
-          Адрес игрового сервера клиента ("ip:port"), не название карты —
-          два разных сервера могут крутить одну и ту же карту.
+      Одно QUIC-соединение на клиента, в нём ровно один bidi-стрим (лишние
+      стримы игнорируются). Каждое сообщение — 4-байтный big-endian префикс
+      длины плюс JSON-тело; лимит тела 64 KiB, handshake-фрейм отдельно
+      ограничен 4096 байтами.
+
+      Первым фреймом клиент шлёт handshake {token, server_ip}, релей
+      отвечает {ok} либо {ok:false, error} и закрывает стрим. Группа не
+      передаётся — релей резолвит активную группу сам по account_id из
+      токена; нет активной группы или аккаунт не член её — отказ на
+      handshake. Кик/смена активной группы рвёт уже открытое соединение
+      через отдельный Redis Pub/Sub. После ok идут sighting/ping/pong в
+      обе стороны.
     messages:
+      clientHandshake:
+        $ref: '#/components/messages/handshakeRequest'
+      relayHandshakeAck:
+        $ref: '#/components/messages/handshakeResponse'
       clientSighting:
         $ref: '#/components/messages/sighting'
       clientPing:
@@ -62,6 +69,20 @@ channels:
         $ref: '#/components/messages/pong'
 
 operations:
+  sendHandshake:
+    action: send
+    channel:
+      $ref: '#/channels/sighting'
+    summary: Первый фрейм в стриме — до ответа релея любой другой трафик отбрасывается.
+    messages:
+      - $ref: '#/channels/sighting/messages/clientHandshake'
+  receiveHandshakeAck:
+    action: receive
+    channel:
+      $ref: '#/channels/sighting'
+    summary: Ответ релея на handshake; при ok=false стрим закрывается сразу после него.
+    messages:
+      - $ref: '#/channels/sighting/messages/relayHandshakeAck'
   sendSighting:
     action: send
     channel:
@@ -81,6 +102,16 @@ operations:
 
 components:
   messages:
+    handshakeRequest:
+      name: handshakeRequest
+      title: Первый фрейм стрима — аутентификация
+      payload:
+        $ref: '#/components/schemas/HandshakeRequest'
+    handshakeResponse:
+      name: handshakeResponse
+      title: Ответ релея на handshake
+      payload:
+        $ref: '#/components/schemas/HandshakeResponse'
     sighting:
       name: sighting
       title: Пачка сайтингов за один тик
@@ -106,6 +137,33 @@ components:
             const: pong
 
   schemas:
+    HandshakeRequest:
+      type: object
+      required: [token, server_ip]
+      description: Фрейм ограничен 4096 байтами (quicserver.maxHandshakeBytes).
+      properties:
+        token:
+          type: string
+          description: >-
+            RS256 JWT от backend_python либо self-service api_key —
+            релей принимает обе формы (internal/tokenauth: JWT проверяется
+            офлайн, api_key резолвится через Redis).
+        server_ip:
+          type: string
+          description: "ip:port игрового сервера."
+      additionalProperties: false
+
+    HandshakeResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+        error:
+          type: string
+          description: Человекочитаемая причина отказа, не машинный код. Только при ok=false.
+      additionalProperties: false
+
     SightingPayload:
       type: object
       required: [type, seq]
@@ -116,28 +174,26 @@ components:
         seq:
           type: integer
           format: uint64
-          description: >
-            Монотонный счётчик тиков клиента-отправителя. Пачка с seq <=
-            последнему принятому отбрасывается целиком (устарела) — не
-            переупорядочивается внутри.
+          description: Монотонный счётчик тиков клиента. Пачка с seq <= последней принятой отбрасывается.
         reporter_character_id:
           type: string
-          description: >-
-            Только во входящем сообщении. Игровой id персонажа отправителя
-            прямо сейчас — не аутентификационная identity (это account_id
-            из JWT), а игровой факт: один аккаунт может иметь персонажей на
-            нескольких серверах/трайбах одновременно.
+          description: Вход и выход. Игровой id персонажа отправителя (не account_id из JWT).
+        reporter_x:
+          type: number
+          format: double
+          description: Вход и выход. Позиция отправителя на момент батча. 0 — неизвестна.
+        reporter_y:
+          type: number
+          format: double
+        reporter_z:
+          type: number
+          format: double
         vanished:
           type: array
           maxItems: 500
           items:
             type: string
-          description: >-
-            Только во входящем сообщении. Ключи (Entity.key) целей, которые
-            клиент раньше видел и с этим батчем больше не видит — явный
-            сигнал "пропало", сильнее молчания/протухания TTL, потому что
-            означает "кто-то реально пересканировал это место и не нашёл",
-            а не просто "перестал смотреть".
+          description: Только вход. Ключи (Entity.key) целей, которые клиент видел раньше и не видит в этом батче.
         reported_by:
           type: string
           format: uuid
@@ -166,14 +222,9 @@ components:
         key:
           type: string
           description: >-
-            Составной идентификатор — "{cat}:{label}:{team}" для dino,
-            "{cat}:{stable_id}:{team}" для player (client_id-стабильный
-            linked_player_data_id вместо ника, т.к. ники могут совпадать).
-            Не Addr из памяти игры (FR-6). Для structure/turret это поле
-            может прийти пустым — relay сам вычисляет его как
-            "{cat}:{contentHash}" (класс + округлённые до 300 единиц
-            координаты) до валидации сообщения; отдельного HTTP-пайплайна
-            для структур в эту версию протокола больше не выделено.
+            "{cat}:{label}:{team}" для dino, "{cat}:{stable_id}:{team}" для
+            player. Не Addr из памяти игры. Для structure/turret может
+            прийти пустым — relay вычисляет сам как "{cat}:{contentHash}".
           example: 'player:8842091337:42'
         cat:
           type: string
@@ -183,16 +234,10 @@ components:
           format: int32
         label:
           type: string
-          description: >-
-            Обязателен для player/dino. Для structure/turret не имеет
-            смысла (нет игрового отображаемого имени) — вместо него
-            обязателен class.
+          description: Обязателен для player/dino. Для structure/turret — class вместо него.
         class:
           type: string
-          description: >-
-            Обязателен для structure/turret (идентичность через class +
-            округлённые координаты — FR-5 в telemetry-api-v1.md). Опционален
-            для player/dino.
+          description: Обязателен для structure/turret. Опционален для player/dino.
         x:
           type: number
           format: double
@@ -222,6 +267,10 @@ components:
         turret:
           $ref: '#/components/schemas/TurretInfo'
           description: Обязателен, когда cat == turret; отсутствует иначе.
+        stable_id:
+          type: integer
+          format: uint64
+          description: linked_player_data_id, только для cat == player. Не Steam id. Без него player не публикуется в ark:stream:player_sighting.
 
     TurretInfo:
       type: object
