@@ -100,6 +100,15 @@ if [[ ! -f keys/relay_cert.pem || ! -f keys/relay_key.pem ]]; then
     -keyout keys/relay_key.pem -out keys/relay_cert.pem \
     -subj "/CN=${RELAY_CN}" 2>/dev/null
   chmod 600 keys/relay_key.pem
+  # backend_go's image is gcr.io/distroless/static-debian12:nonroot -- the
+  # relay process inside the container runs as UID/GID 65532, not root.
+  # Left root:root (deploy.sh normally runs as root/sudo), a 600 key is
+  # unreadable to that UID and the container crash-loops on startup
+  # ("load cert/key: ... permission denied"). backend_python's jwt_private.pem
+  # doesn't need this -- that image has no USER directive, runs as root.
+  if ! chown 65532:65532 keys/relay_key.pem 2>/dev/null; then
+    warn "could not chown keys/relay_key.pem to 65532:65532 (not running as root?) -- backend_go will crash-loop with 'permission denied' until you run: sudo chown 65532:65532 keys/relay_key.pem"
+  fi
   if ! grep -q '^RELAY_TLS_CERT_FILE=' .env; then
     {
       echo "RELAY_TLS_CERT_FILE=/keys/relay_cert.pem"
