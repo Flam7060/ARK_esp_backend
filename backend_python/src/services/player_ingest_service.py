@@ -1,15 +1,29 @@
 """Сервис ingestion `player` из Redis Stream — первый конкретный consumer
-поверх core/redis_stream.py. Контракт сообщения (поля `XADD`) — определён
-здесь, т.к. Go-сторона (`ark_relay`), которая будет писать в этот стрим,
-ещё не существует; это тот контракт, который она обязана соблюсти:
+поверх core/redis_stream.py. Контракт сообщения (поля `XADD`), с апстрима
+(`ark_relay`'s internal/streamproducer.PlayerFields, actual producer since
+CategoryPlayer stopped being excluded from streamproducer.StreamNameFor):
 
-    server_id              (UUID, обязателен) — models.topology.Server.id
-    platform_id            (str, обязателен)  — идентификатор игрока платформы
-    character_name         (str, опционален)  — текущий игровой ник
-    level                  (int, опционален)
-    x, y, z                (float, опциональны)
-    observed_at            (ISO 8601, опционален — по умолчанию время приёма)
-    reported_by_account_id (UUID, опционален)  — чей клиент это увидел
+    server_ip               (str, обязателен)  — "ip:port", резолвится в
+                                                  models.topology.Server
+                                                  через тот же
+                                                  server_repo.get_or_create_server_by_ip,
+                                                  что structure/dino
+                                                  ingestion (не готовый
+                                                  UUID -- Go знает только
+                                                  строку подключения)
+    platform_id              (str, обязателен)  — сейчас это ARK
+                                                   linked_player_data_id
+                                                   стрингифицированный, НЕ
+                                                   настоящий Steam/платформенный
+                                                   id (см.
+                                                   streamproducer.PlayerFields'
+                                                   собственный doc-комментарий
+                                                   на Go-стороне)
+    character_name          (str, опционален)  — текущий игровой ник
+    level                   (int, опционален)  — Go-продюсер это поле пока не шлёт
+    x, y, z                 (float, опциональны)
+    observed_at             (ISO 8601, опционален — по умолчанию время приёма)
+    reported_by_account_id  (UUID, опционален)  — чей клиент это увидел
 
 Поле, которого нет в сообщении, НЕ затирает сохранённое значение (частичное
 обновление — см. repositories/player_repo.upsert_player) — producer не
@@ -29,7 +43,7 @@ from sqlalchemy.orm import Session
 
 from core.redis_stream import Handler, StreamFields
 from models.player import Player
-from repositories import player_repo
+from repositories import player_repo, server_repo
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +54,7 @@ GROUP_NAME = "ark_backend_player_ingest"
 
 
 class PlayerSighting(BaseModel):
-    server_id: uuid.UUID
+    server_ip: str
     platform_id: str
     character_name: str | None = None
     level: int | None = None
@@ -71,11 +85,12 @@ def parse_sighting(fields: StreamFields) -> PlayerSighting | None:
 
 
 def ingest_player_sighting(session: Session, sighting: PlayerSighting) -> Player:
+    server = server_repo.get_or_create_server_by_ip(session, sighting.server_ip)
     player_repo.get_or_create_person(session, sighting.platform_id)
     now = datetime.now(UTC)
     return player_repo.upsert_player(
         session,
-        server_id=sighting.server_id,
+        server_id=server.id,
         platform_id=sighting.platform_id,
         character_name=sighting.character_name,
         level=sighting.level,

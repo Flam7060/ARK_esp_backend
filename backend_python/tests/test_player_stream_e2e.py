@@ -11,6 +11,7 @@ db_session-фикстуру (та в отдельной, откатываемо�
 from __future__ import annotations
 
 import asyncio
+import random
 import uuid
 
 import redis.asyncio as redis
@@ -18,7 +19,6 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
 
 from core.redis_stream import ensure_group, run_consumer
-from models.ark_lookups import GameMap
 from models.player import Player
 from models.topology import Person, Server
 from services.player_ingest_service import make_handler
@@ -30,16 +30,12 @@ def test_xadd_message_is_ingested_into_postgres(redis_available, db_engine):
     stream = f"test:player_sighting:{uuid.uuid4().hex[:8]}"
     group = f"test:player_ingest:{uuid.uuid4().hex[:8]}"
     platform_id = f"steam:e2e-{uuid.uuid4().hex[:8]}"
+    # Unique per run (random high port) -- the consumer creates the server
+    # itself via server_repo.get_or_create_server_by_ip, unlike the old
+    # server_id contract which needed a pre-created row here.
+    server_ip = f"203.0.113.{random.randint(1, 254)}:{random.randint(20000, 60000)}"
 
     own_session_factory = sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
-    with own_session_factory() as setup_session:
-        setup_session.add(GameMap(code=f"map-{uuid.uuid4().hex[:6]}", name="E2E Map"))
-        setup_session.flush()
-        map_code = setup_session.execute(select(GameMap.code)).scalars().first()
-        server = Server(name="E2E Server", map_code=map_code)
-        setup_session.add(server)
-        setup_session.commit()
-        server_id = server.id
 
     async def body() -> None:
         client = redis.Redis.from_url(config.redis.url, decode_responses=True)
@@ -48,7 +44,7 @@ def test_xadd_message_is_ingested_into_postgres(redis_available, db_engine):
             await client.xadd(
                 stream,
                 {
-                    "server_id": str(server_id),
+                    "server_ip": server_ip,
                     "platform_id": platform_id,
                     "character_name": "E2ERex",
                     "level": "7",
@@ -81,19 +77,22 @@ def test_xadd_message_is_ingested_into_postgres(redis_available, db_engine):
             await client.delete(stream)
             await client.aclose()
 
+    server_id: uuid.UUID | None = None
     try:
         asyncio.run(body())
 
         with own_session_factory() as check_session:
             player = check_session.execute(
-                select(Player).where(Player.server_id == server_id, Player.platform_id == platform_id)
+                select(Player).where(Player.platform_id == platform_id)
             ).scalar_one()
+            server_id = player.server_id
             assert player.character_name == "E2ERex"
             assert player.level == 7
             assert player.x == 1.1
     finally:
         with own_session_factory() as cleanup_session:
-            cleanup_session.execute(delete(Player).where(Player.server_id == server_id))
+            cleanup_session.execute(delete(Player).where(Player.platform_id == platform_id))
             cleanup_session.execute(delete(Person).where(Person.platform_id == platform_id))
-            cleanup_session.execute(delete(Server).where(Server.id == server_id))
+            if server_id is not None:
+                cleanup_session.execute(delete(Server).where(Server.id == server_id))
             cleanup_session.commit()
