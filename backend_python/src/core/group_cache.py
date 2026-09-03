@@ -26,6 +26,10 @@ class GroupCache(Protocol):
 
     def delete_group(self, group_id: UUID, member_ids: list[UUID]) -> None: ...
 
+    def set_active_group(self, account_id: UUID, group_id: UUID) -> None: ...
+
+    def clear_active_group(self, account_id: UUID) -> None: ...
+
 
 def _members_key(group_id: UUID) -> str:
     return f"ark:group:{group_id}:members"
@@ -33,6 +37,15 @@ def _members_key(group_id: UUID) -> str:
 
 def _revoked_channel(group_id: UUID) -> str:
     return f"ark:group:{group_id}:revoked"
+
+
+def _active_group_key(account_id: UUID) -> str:
+    # relay resolves "which room does this account_id's sharing go to"
+    # purely from this key -- no group_id travels in the client's wire
+    # handshake at all anymore (see docstring at top of this module and
+    # models/account.py's active_group_id, the Postgres source of truth
+    # this key mirrors).
+    return f"ark:account:{account_id}:active_group"
 
 
 class RedisGroupCache:
@@ -64,3 +77,9 @@ class RedisGroupCache:
         for account_id in member_ids:
             self._rdb.publish(_revoked_channel(group_id), str(account_id))
         self._rdb.delete(_members_key(group_id))
+
+    def set_active_group(self, account_id: UUID, group_id: UUID) -> None:
+        self._rdb.set(_active_group_key(account_id), str(group_id))
+
+    def clear_active_group(self, account_id: UUID) -> None:
+        self._rdb.delete(_active_group_key(account_id))

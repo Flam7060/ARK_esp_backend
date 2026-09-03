@@ -24,11 +24,12 @@ import (
 	"ark_relay/internal/tokenauth"
 )
 
-// fakeGroupChecker answers IsMember from an in-memory set, so these tests
-// never touch a real Redis connection.
+// fakeGroupChecker answers IsMember/ActiveGroup from in-memory maps, so
+// these tests never touch a real Redis connection.
 type fakeGroupChecker struct {
-	members map[string]bool // "groupID/accountID" -> member
-	err     error
+	members      map[string]bool   // "groupID/accountID" -> member
+	activeGroups map[string]string // accountID -> groupID
+	err          error
 }
 
 func (f *fakeGroupChecker) IsMember(_ context.Context, groupID, accountID string) (bool, error) {
@@ -36,6 +37,17 @@ func (f *fakeGroupChecker) IsMember(_ context.Context, groupID, accountID string
 		return false, f.err
 	}
 	return f.members[groupID+"/"+accountID], nil
+}
+
+func (f *fakeGroupChecker) ActiveGroup(_ context.Context, accountID string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	groupID, ok := f.activeGroups[accountID]
+	if !ok {
+		return "", store.ErrNoActiveGroup
+	}
+	return groupID, nil
 }
 
 // noop* below satisfy just enough of hub.EntityWriter/hub.HashCache/
@@ -119,7 +131,7 @@ func TestServeHTTP_MissingToken(t *testing.T) {
 	verifier, _ := testVerifier(t)
 	h := newTestHandler(t, verifier, &fakeGroupChecker{})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/relay/ws?group_id=g1&server_ip=1.2.3.4:7777", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/relay/ws?server_ip=1.2.3.4:7777", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -132,7 +144,7 @@ func TestServeHTTP_InvalidToken(t *testing.T) {
 	verifier, _ := testVerifier(t)
 	h := newTestHandler(t, verifier, &fakeGroupChecker{})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/relay/ws?group_id=g1&server_ip=1.2.3.4:7777&token=garbage", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/relay/ws?server_ip=1.2.3.4:7777&token=garbage", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -141,7 +153,7 @@ func TestServeHTTP_InvalidToken(t *testing.T) {
 	}
 }
 
-func TestServeHTTP_MissingGroupOrServerParams(t *testing.T) {
+func TestServeHTTP_MissingServerParam(t *testing.T) {
 	verifier, priv := testVerifier(t)
 	h := newTestHandler(t, verifier, &fakeGroupChecker{})
 	token := signToken(t, priv, "acct-1")
@@ -151,17 +163,38 @@ func TestServeHTTP_MissingGroupOrServerParams(t *testing.T) {
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for missing group_id/server_ip, got %d", rec.Code)
+		t.Fatalf("expected 400 for missing server_ip, got %d", rec.Code)
+	}
+}
+
+func TestServeHTTP_NoActiveGroupIsRefused(t *testing.T) {
+	verifier, priv := testVerifier(t)
+	// acct-1 resolves fine but has no active group set (fakeGroupChecker's
+	// zero value: activeGroups is nil, ActiveGroup returns ErrNoActiveGroup).
+	h := newTestHandler(t, verifier, &fakeGroupChecker{})
+	token := signToken(t, priv, "acct-1")
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/relay/ws?server_ip=1.2.3.4:7777&token="+token, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for an account with no active group, got %d", rec.Code)
 	}
 }
 
 func TestServeHTTP_NotAGroupMemberIsRefused(t *testing.T) {
 	verifier, priv := testVerifier(t)
-	members := &fakeGroupChecker{members: map[string]bool{}} // acct-1 is not in g1
+	// Active group resolves to g1, but the membership set (out of sync,
+	// e.g. mid-leave) says acct-1 isn't actually in it.
+	members := &fakeGroupChecker{
+		activeGroups: map[string]string{"acct-1": "g1"},
+		members:      map[string]bool{},
+	}
 	h := newTestHandler(t, verifier, members)
 	token := signToken(t, priv, "acct-1")
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/relay/ws?group_id=g1&server_ip=1.2.3.4:7777&token="+token, nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/relay/ws?server_ip=1.2.3.4:7777&token="+token, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -176,22 +209,25 @@ func TestServeHTTP_MembershipCheckErrorFailsClosed(t *testing.T) {
 	h := newTestHandler(t, verifier, members)
 	token := signToken(t, priv, "acct-1")
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/relay/ws?group_id=g1&server_ip=1.2.3.4:7777&token="+token, nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/relay/ws?server_ip=1.2.3.4:7777&token="+token, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected a failed membership check to refuse the connection (fail closed), got %d", rec.Code)
+		t.Fatalf("expected a failed active-group resolve to refuse the connection (fail closed), got %d", rec.Code)
 	}
 }
 
 func TestServeHTTP_MemberPassesAuthAndReachesUpgrade(t *testing.T) {
 	verifier, priv := testVerifier(t)
-	members := &fakeGroupChecker{members: map[string]bool{"g1/acct-1": true}}
+	members := &fakeGroupChecker{
+		activeGroups: map[string]string{"acct-1": "g1"},
+		members:      map[string]bool{"g1/acct-1": true},
+	}
 	h := newTestHandler(t, verifier, members)
 	token := signToken(t, priv, "acct-1")
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/relay/ws?group_id=g1&server_ip=1.2.3.4:7777&token="+token, nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/relay/ws?server_ip=1.2.3.4:7777&token="+token, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -214,12 +250,12 @@ func TestServeHTTP_MemberPassesAuthAndReachesUpgrade(t *testing.T) {
 	// Distinguish "reached Upgrade and got rejected there" from "never
 	// left this handler's own param-validation gate" (both happen to
 	// answer 400): this handler's own gate writes a specific message
-	// ("group_id and server_ip query parameters are required"); gorilla's
-	// Upgrader, with no custom u.Error callback configured, falls back to
-	// the generic http.StatusText(400) body ("Bad Request") -- see
+	// ("server_ip query parameter is required"); gorilla's Upgrader, with
+	// no custom u.Error callback configured, falls back to the generic
+	// http.StatusText(400) body ("Bad Request") -- see
 	// (*Upgrader).returnError. Seeing the generic text here proves this
 	// request cleared this handler's own gate and failed inside Upgrade.
-	if body := rec.Body.String(); strings.Contains(body, "group_id") {
+	if body := rec.Body.String(); strings.Contains(body, "server_ip") {
 		t.Fatalf("expected to clear this handler's own param gate, but got its rejection body: %q", body)
 	}
 }

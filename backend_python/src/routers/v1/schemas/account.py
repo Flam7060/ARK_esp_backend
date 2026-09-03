@@ -28,6 +28,15 @@ class AccountOut(BaseModel):
 class AccountMeOut(BaseModel):
     id: UUID
     groups: list[GroupOut] = Field(description="Группы шаринга, в которых состоит аккаунт.")
+    active_group_id: UUID | None = Field(
+        default=None,
+        description="Группа, в которую сейчас льётся живой шеринг с игрового клиента. "
+        "NULL — шеринг сейчас никуда не льётся, даже если аккаунт состоит в группах.",
+    )
+
+
+class ActiveGroupSet(BaseModel):
+    group_id: UUID = Field(description="Должна быть одной из групп, где аккаунт уже состоит.")
 
 
 class ChangePasswordRequest(BaseModel):

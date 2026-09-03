@@ -11,11 +11,17 @@ info:
     файл тем же PR-ом, иначе спека молча разъедется с реальным протоколом.
     См. также docker-compose.yml/backend_python/docs/telemetry-api-v1.md §7.3.
 
-    v2: раздача переведена с игрового tribe_id на пару (group_id,
+    v2: раздача переведена с игрового tribe_id на пару (sharing group,
     server_ip) — см. §7 обновлённого telemetry-api-v1.md. JWT сократился до
     одного claim (account_id); категории расширены структурами/турелями;
     Entity/Inbound получили новые поля для этого и для дедуп-потока в
     Postgres (внутренний механизм, самого потока в этом канале не видно).
+
+    v3: group_id ушёл из хендшейка. Группа больше не параметр, который
+    указывает клиент — relay резолвит её сам по account_id (одна активная
+    группа на аккаунт, account.active_group_id в backend_python,
+    зеркалится в Redis ark:account:{account_id}:active_group). Клиент,
+    у которого нет активной группы, получает 403 при хендшейке.
 
 servers:
   relay:
@@ -32,15 +38,15 @@ channels:
       Один WS-коннект на клиента. Authorization: Bearer <jwt> заголовком
       (нативный Go-клиент) или ?token=<jwt> query-параметром (браузер —
       WebSocket API не даёт ставить заголовки на handshake). Handshake
-      дополнительно требует query-параметры group_id и server_ip — оба
-      обязательны, коннект без них отклоняется 400 ещё до проверки токена.
-      account_id (из JWT) должен быть текущим членом group_id — проверяется
-      по Redis SET ark:group:{group_id}:members на каждый коннект, иначе
-      403. Кик/выход/удаление группы рвёт уже открытое соединение почти
-      сразу через отдельный Redis Pub/Sub-канал (не часть этого WS-канала).
+      дополнительно требует query-параметр server_ip — обязателен, коннект
+      без него отклоняется 400 ещё до проверки токена. Группа клиентом не
+      передаётся: relay резолвит текущую активную группу account_id (из
+      JWT/API-key) сам через Redis ark:account:{account_id}:active_group,
+      зеркало backend_python's account.active_group_id. Нет активной
+      группы — 403. Кик/выход/удаление группы или смена активной группы
+      рвёт уже открытое соединение почти сразу через отдельный Redis
+      Pub/Sub-канал (не часть этого WS-канала).
     parameters:
-      group_id:
-        description: UUID sharing-группы (backend_python sharing_group.id).
       server_ip:
         description: >-
           Адрес игрового сервера клиента ("ip:port"), не название карты —
@@ -68,8 +74,8 @@ operations:
     channel:
       $ref: '#/channels/sighting'
     summary: >-
-      Клиент получает сайтинг, отправленный другим клиентом той же
-      (group_id, server_ip) комнаты.
+      Клиент получает сайтинг, отправленный другим клиентом с той же
+      активной группой и server_ip.
     messages:
       - $ref: '#/channels/sighting/messages/relayedSighting'
 

@@ -19,7 +19,16 @@ from sqlalchemy.orm import Session
 
 from core.account_auth import AccountClaims, get_current_account
 from core.db import get_session
-from routers.v1.schemas.account import AccountMeOut, AccountOut, AccountRegisterRequest, ChangePasswordRequest
+from core.group_cache import GroupCache
+from core.redis_sync import get_group_cache
+from routers.v1.schemas.account import (
+    AccountMeOut,
+    AccountOut,
+    AccountRegisterRequest,
+    ActiveGroupSet,
+    ChangePasswordRequest,
+)
+from repositories import account_repo
 from routers.v1.schemas.password_reset import PasswordResetConfirmRequest
 from routers.v1.schemas.sharing import GroupOut
 from services.account_service import (
@@ -30,7 +39,7 @@ from services.account_service import (
     register_account,
 )
 from services.password_reset_service import InvalidResetTokenError, confirm_reset
-from services.sharing_service import list_my_groups
+from services.sharing_service import NotFoundError, list_my_groups, set_active_group
 
 router = APIRouter(prefix="/v1/accounts", tags=["Accounts"])
 
@@ -69,11 +78,43 @@ def get_me(
     claims: Annotated[AccountClaims, Depends(get_current_account)],
     session: Annotated[Session, Depends(get_session)],
 ) -> AccountMeOut:
-    """Идентификатор аккаунта и список групп шаринга, в которых он
-    состоит. В будущем сюда же добавится игровая статистика — тело
-    ответа расширится, отдельного эндпоинта под неё не будет."""
+    """Идентификатор аккаунта, список групп шаринга, в которых он
+    состоит, и `active_group_id` — та единственная группа, куда сейчас
+    реально льётся live-шеринг с игрового клиента (relay резолвит её по
+    одному account_id, клиент никакой group_id ему не передаёт). В
+    будущем сюда же добавится игровая статистика — тело ответа
+    расширится, отдельного эндпоинта под неё не будет."""
     groups = [GroupOut.model_validate(g) for g in list_my_groups(session, claims.account_id)]
-    return AccountMeOut(id=claims.account_id, groups=groups)
+    account = account_repo.get_by_id(session, claims.account_id)
+    assert account is not None  # get_current_account уже гарантировал существование
+    return AccountMeOut(id=claims.account_id, groups=groups, active_group_id=account.active_group_id)
+
+
+@router.post(
+    "/me/active-group",
+    response_model=AccountMeOut,
+    summary="Переключить активную группу шаринга",
+)
+def post_active_group(
+    body: ActiveGroupSet,
+    claims: Annotated[AccountClaims, Depends(get_current_account)],
+    session: Annotated[Session, Depends(get_session)],
+    cache: Annotated[GroupCache, Depends(get_group_cache)],
+) -> AccountMeOut:
+    """Меняет, в какую из групп, где аккаунт уже состоит, сейчас льётся
+    его шеринг. Нужно только если аккаунт состоит больше чем в одной
+    группе одновременно — `POST /v1/groups` и вступление по приглашению
+    уже делают только что созданную/принятую группу активной
+    автоматически."""
+    try:
+        set_active_group(session, claims.account_id, body.group_id, cache)
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "group_not_found", "message": str(exc), "details": {}}},
+        ) from exc
+    groups = [GroupOut.model_validate(g) for g in list_my_groups(session, claims.account_id)]
+    return AccountMeOut(id=claims.account_id, groups=groups, active_group_id=body.group_id)
 
 
 @router.post("/me/change-password", response_model=AccountOut, summary="Сменить пароль (FR-053)")

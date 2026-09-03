@@ -11,8 +11,9 @@ from sqlalchemy.orm import Session
 
 from core.group_cache import GroupCache
 from core.tokens import generate_token, hash_token
+from models.account import Account
 from models.sharing import GroupInviteToken, GroupMember, SharingGroup
-from repositories import sharing_repo
+from repositories import account_repo, sharing_repo
 from routers.v1.schemas.sharing import GroupInviteCreate
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "list_members",
     "list_my_groups",
     "remove_member",
+    "set_active_group",
 ]
 
 
@@ -64,7 +66,32 @@ def create_group(session: Session, account_id: UUID, name: str, cache: GroupCach
     sharing_repo.insert_member(session, GroupMember(group_id=group.id, account_id=account_id, role_code="owner"))
     if cache is not None:
         cache.add_member(group.id, account_id)
+    # Создатель начинает шарить в свою же новую группу сразу — тот же
+    # принцип, что и "владелец автоматически становится owner", не
+    # отдельный шаг. relay резолвит group_id именно отсюда (account_id
+    # -> active_group_id), клиент больше group_id не передаёт вообще.
+    _set_active_group(session, account_id, group.id, cache)
     return group
+
+
+def _set_active_group(session: Session, account_id: UUID, group_id: UUID, cache: GroupCache | None) -> None:
+    account = session.get(Account, account_id)
+    assert account is not None  # вызывающий уже прошёл get_current_account на этом самом account_id
+    account.active_group_id = group_id
+    session.commit()
+    if cache is not None:
+        cache.set_active_group(account_id, group_id)
+
+
+def _clear_active_group_if_matches(session: Session, account_id: UUID, group_id: UUID, cache: GroupCache | None) -> None:
+    account = session.get(Account, account_id)
+    assert account is not None
+    if account.active_group_id != group_id:
+        return  # ушли/выгнаны из группы, которая для этого account'а и так не была активной
+    account.active_group_id = None
+    session.commit()
+    if cache is not None:
+        cache.clear_active_group(account_id)
 
 
 def list_my_groups(session: Session, account_id: UUID) -> list[SharingGroup]:
@@ -130,6 +157,10 @@ def join_group(session: Session, account_id: UUID, token: str, cache: GroupCache
     session.commit()
     if cache is not None:
         cache.add_member(invite.group_id, account_id)
+    # Вступление тоже переключает активную группу на эту — тот же принцип,
+    # что у create_group: цель вступления обычно "теперь шарю сюда", а не
+    # молчаливое членство без эффекта на шеринг.
+    _set_active_group(session, account_id, invite.group_id, cache)
     return member
 
 
@@ -142,6 +173,7 @@ def leave_group(session: Session, group_id: UUID, account_id: UUID, cache: Group
     sharing_repo.delete_member(session, member)
     if cache is not None:
         cache.remove_member(group_id, account_id)
+    _clear_active_group_if_matches(session, account_id, group_id, cache)
 
 
 def remove_member(
@@ -160,11 +192,30 @@ def remove_member(
     sharing_repo.delete_member(session, member)
     if cache is not None:
         cache.remove_member(group_id, target_account_id)
+    _clear_active_group_if_matches(session, target_account_id, group_id, cache)
 
 
 def delete_group(session: Session, group_id: UUID, account_id: UUID, cache: GroupCache | None = None) -> None:
     group = _require_owner(session, group_id, account_id)
     member_ids = [m.account_id for m in sharing_repo.list_members(session, group_id)]
+    # До delete_group, не после: ON DELETE SET NULL на самой колонке уже
+    # обнулит account.active_group_id в Postgres, когда group_id ниже
+    # реально снесётся, но НЕ обнулит зеркало в Redis — Postgres ничего не
+    # знает про кэш Go-стороны. Список берём заранее (после сноса группы
+    # active_group_id уже NULL, WHERE active_group_id = group_id ничего не
+    # найдёт).
+    active_account_ids = account_repo.list_ids_with_active_group(session, group_id)
     sharing_repo.delete_group(session, group)
     if cache is not None:
         cache.delete_group(group_id, member_ids)
+        for active_account_id in active_account_ids:
+            cache.clear_active_group(active_account_id)
+
+
+def set_active_group(session: Session, account_id: UUID, group_id: UUID, cache: GroupCache | None = None) -> None:
+    """Переключает, в какую из групп, где account состоит, сейчас льётся
+    его шеринг — на случай, если он в нескольких сразу (create_group/
+    join_group уже включают целевую группу активной автоматически, это
+    ручное переключение между уже существующим членством)."""
+    get_group_for_member(session, group_id, account_id)  # 404, если не участник — та же изоляция, что везде
+    _set_active_group(session, account_id, group_id, cache)

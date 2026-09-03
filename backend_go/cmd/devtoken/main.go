@@ -19,9 +19,9 @@ import (
 
 // claims mirrors authjwt.Claims exactly (json tag included) — devtoken
 // signs a *test* token in the same shape the real ark_backend login issues,
-// not a superset: group/server-ip scope is dynamic (Redis membership,
-// checked per-connect against ?group_id=&server_ip=), never baked into the
-// JWT (see authjwt.Claims doc for why).
+// not a superset: group/server-ip scope is dynamic (active group resolved
+// server-side from account_id, server_ip checked per-connect against
+// ?server_ip=), never baked into the JWT (see authjwt.Claims doc for why).
 type claims struct {
 	AccountID string `json:"account_id"`
 	jwt.RegisteredClaims

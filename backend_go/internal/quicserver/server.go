@@ -18,12 +18,14 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/quic-go/quic-go"
 
 	"ark_relay/internal/hub"
+	"ark_relay/internal/store"
 	"ark_relay/internal/streamproducer"
 	"ark_relay/internal/tokenauth"
 )
@@ -34,6 +36,10 @@ import (
 // should need the other.
 type GroupChecker interface {
 	IsMember(ctx context.Context, groupID, accountID string) (bool, error)
+	// ActiveGroup resolves the group this account currently shares into,
+	// purely from account_id (see wsserver.GroupChecker's identical
+	// method for why). Returns store.ErrNoActiveGroup if unset.
+	ActiveGroup(ctx context.Context, accountID string) (string, error)
 }
 
 // Server accepts QUIC connections and hands each one's single stream to
@@ -159,8 +165,8 @@ func (s *Server) handshake(stream *quic.Stream) (accountID, groupID, serverIP st
 		s.reject(stream, "malformed handshake")
 		return "", "", "", false
 	}
-	if req.Token == "" || req.GroupID == "" || req.ServerIP == "" {
-		s.reject(stream, "token, group_id and server_ip are all required")
+	if req.Token == "" || req.ServerIP == "" {
+		s.reject(stream, "token and server_ip are both required")
 		return "", "", "", false
 	}
 
@@ -171,14 +177,30 @@ func (s *Server) handshake(stream *quic.Stream) (accountID, groupID, serverIP st
 		return "", "", "", false
 	}
 
-	member, err := s.members.IsMember(stream.Context(), req.GroupID, accountID)
+	// groupID comes only from server-side resolution by account_id, never
+	// from the client (see handshakeRequest's own doc comment).
+	groupID, err = s.members.ActiveGroup(stream.Context(), accountID)
+	if errors.Is(err, store.ErrNoActiveGroup) {
+		s.log.Warn("quicserver: connect refused: no active group", "account_id", accountID)
+		s.reject(stream, "account has no active sharing group")
+		return "", "", "", false
+	}
 	if err != nil {
-		s.log.Error("quicserver: group membership check failed", "err", err, "account_id", accountID, "group_id", req.GroupID)
+		s.log.Error("quicserver: active group resolve failed", "err", err, "account_id", accountID)
+		s.reject(stream, "active group resolve failed")
+		return "", "", "", false
+	}
+
+	// Still checked, not just trusted from the active-group cache -- see
+	// wsserver.Handler.ServeHTTP's identical comment.
+	member, err := s.members.IsMember(stream.Context(), groupID, accountID)
+	if err != nil {
+		s.log.Error("quicserver: group membership check failed", "err", err, "account_id", accountID, "group_id", groupID)
 		s.reject(stream, "membership check failed")
 		return "", "", "", false
 	}
 	if !member {
-		s.log.Warn("quicserver: connect refused: not a group member", "account_id", accountID, "group_id", req.GroupID)
+		s.log.Warn("quicserver: connect refused: not a group member", "account_id", accountID, "group_id", groupID)
 		s.reject(stream, "not a member of this group")
 		return "", "", "", false
 	}
@@ -187,7 +209,7 @@ func (s *Server) handshake(stream *quic.Stream) (accountID, groupID, serverIP st
 		s.log.Warn("quicserver: handshake ack write failed", "err", err)
 		return "", "", "", false
 	}
-	return accountID, req.GroupID, req.ServerIP, true
+	return accountID, groupID, req.ServerIP, true
 }
 
 func (s *Server) reject(stream *quic.Stream, reason string) {

@@ -45,3 +45,13 @@ class Account(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Единственная группа, в которую сейчас реально льётся шеринг этого
+    # account'а — NOT "группа по умолчанию для UI", а ровно то, что relay
+    # (backend_go) резолвит по одному account_id, без group_id от клиента
+    # (см. core/group_cache.py's set_active_group). NULL = живой шеринг
+    # для этого account'а сейчас невозможен, даже если он состоит в
+    # группах — установка происходит явно (create_group/join_group) или
+    # руками (services.sharing_service.set_active_group).
+    active_group_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sharing_group.id", ondelete="SET NULL"), nullable=True
+    )

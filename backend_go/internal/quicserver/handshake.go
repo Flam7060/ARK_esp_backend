@@ -3,12 +3,13 @@ package quicserver
 // handshakeRequest is the first length-prefixed frame the client must send
 // on the one stream it opens per connection. A bare QUIC connection has no
 // equivalent of HTTP's Authorization header or query string (that's the WS
-// path's mechanism, see wsserver.Handler) — so the same three values
-// (bearer token, group_id, server_ip) that travel as WS connect params
-// travel here as the body of an explicit first message instead.
+// path's mechanism, see wsserver.Handler) — so the same two values
+// (bearer token, server_ip) that travel as WS connect params travel here
+// as the body of an explicit first message instead. No group_id: the
+// client never states one, on either transport — the relay resolves it
+// itself from token's account_id (see store.GroupMembership.ActiveGroup).
 type handshakeRequest struct {
 	Token    string `json:"token"`
-	GroupID  string `json:"group_id"`
 	ServerIP string `json:"server_ip"`
 }
 

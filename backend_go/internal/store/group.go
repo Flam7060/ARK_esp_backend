@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/redis/go-redis/v9"
@@ -35,4 +36,32 @@ func (g *GroupMembership) IsMember(ctx context.Context, groupID, accountID strin
 
 func groupMembersKey(groupID string) string {
 	return fmt.Sprintf("ark:group:%s:members", groupID)
+}
+
+// ErrNoActiveGroup means the account has no active sharing group set --
+// either it never joined/created one, or it left the one it had (see
+// core/group_cache.py's clear_active_group). Callers should refuse the
+// connection, not treat it as a fault.
+var ErrNoActiveGroup = errors.New("store: account has no active group")
+
+// ActiveGroup resolves "which group does this account's sharing route
+// into" purely from account_id -- the client no longer states, and the
+// relay no longer trusts, a client-declared group_id at all (see
+// wsserver.Handler.ServeHTTP / quicserver.Server.handshake, both call
+// this instead of reading a group_id off the wire). Backed by
+// core/group_cache.py's RedisGroupCache.set_active_group/
+// clear_active_group, mirroring Postgres account.active_group_id.
+func (g *GroupMembership) ActiveGroup(ctx context.Context, accountID string) (string, error) {
+	groupID, err := g.rdb.Get(ctx, activeGroupKey(accountID)).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", ErrNoActiveGroup
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: active group %s: %w", accountID, err)
+	}
+	return groupID, nil
+}
+
+func activeGroupKey(accountID string) string {
+	return fmt.Sprintf("ark:account:%s:active_group", accountID)
 }

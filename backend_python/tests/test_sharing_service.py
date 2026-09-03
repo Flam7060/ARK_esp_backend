@@ -46,6 +46,7 @@ class FakeGroupCache:
     def __init__(self) -> None:
         self.members: dict[uuid.UUID, set[uuid.UUID]] = {}
         self.revoked: list[tuple[uuid.UUID, uuid.UUID]] = []
+        self.active_group: dict[uuid.UUID, uuid.UUID] = {}
 
     def add_member(self, group_id: uuid.UUID, account_id: uuid.UUID) -> None:
         self.members.setdefault(group_id, set()).add(account_id)
@@ -58,6 +59,12 @@ class FakeGroupCache:
         for account_id in member_ids:
             self.revoked.append((group_id, account_id))
         self.members.pop(group_id, None)
+
+    def set_active_group(self, account_id: uuid.UUID, group_id: uuid.UUID) -> None:
+        self.active_group[account_id] = group_id
+
+    def clear_active_group(self, account_id: uuid.UUID) -> None:
+        self.active_group.pop(account_id, None)
 
 
 def test_create_group_makes_creator_owner(db_session):

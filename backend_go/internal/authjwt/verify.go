@@ -13,10 +13,12 @@
 // belongs to are not baked into the JWT — a token minted once at login
 // would go stale the moment sharing-group membership changes (join/leave/
 // kick), and re-issuing a token on every membership edit is exactly the
-// coupling the group<->relay boundary is meant to avoid. Instead: group_id
-// and server_ip travel as WS connect parameters (see wsserver.Handler),
-// checked against a live Redis membership set on every connect (see
-// internal/hub), and per-sighting game data (team/tribe/reporter character)
+// coupling the group<->relay boundary is meant to avoid. Instead: the
+// active group is resolved server-side from account_id alone (never a
+// client-declared group_id) and server_ip travels as a WS connect
+// parameter (see wsserver.Handler), checked against a live Redis
+// membership set on every connect (see internal/hub), and per-sighting
+// game data (team/tribe/reporter character)
 // travels in the message body itself (internal/protocol.Entity/Inbound) —
 // the client is the source of truth for its own in-game state, the JWT is
 // only proof of which account is speaking.
@@ -35,7 +37,7 @@ import (
 )
 
 // Claims is the subset of the JWT payload the relay relies on — identity
-// only. Fan-out scope (group_id + server_ip) is not a claim; see the
+// only. Fan-out scope (active group + server_ip) is not a claim; see the
 // package doc comment above for why.
 type Claims struct {
 	AccountID string `json:"account_id"`

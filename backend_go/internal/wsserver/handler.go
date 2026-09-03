@@ -5,6 +5,7 @@ package wsserver
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"ark_relay/internal/hub"
+	"ark_relay/internal/store"
 	"ark_relay/internal/streamproducer"
 	"ark_relay/internal/tokenauth"
 )
@@ -22,6 +24,11 @@ import (
 // connection.
 type GroupChecker interface {
 	IsMember(ctx context.Context, groupID, accountID string) (bool, error)
+	// ActiveGroup resolves the group this account currently shares into,
+	// purely from account_id -- the client sends no group_id at all
+	// anymore (see ServeHTTP's own comment on why). Returns
+	// store.ErrNoActiveGroup if the account has none set.
+	ActiveGroup(ctx context.Context, accountID string) (string, error)
 }
 
 // Handler upgrades authenticated, authorized requests to WebSocket
@@ -66,11 +73,13 @@ func New(h *hub.Hub, resolver *tokenauth.Resolver, es hub.EntityWriter, hc hub.H
 	}
 }
 
-// ServeHTTP verifies the request's JWT, checks the caller is currently a
-// member of the requested group, then upgrades to WebSocket and blocks
-// running the connection until it ends. Every failure — auth, missing
-// params, not a member — never reaches the upgrade: fail closed before the
-// socket exists.
+// ServeHTTP verifies the request's JWT, resolves the caller's active
+// sharing group server-side (never trusts a client-declared group_id —
+// there isn't one on the wire to trust), checks live membership in it,
+// then upgrades to WebSocket and blocks running the connection until it
+// ends. Every failure — auth, no active group, missing params, not a
+// member — never reaches the upgrade: fail closed before the socket
+// exists.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	token := bearerToken(r)
 	if token == "" {
@@ -85,17 +94,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	groupID := r.URL.Query().Get("group_id")
 	serverIP := r.URL.Query().Get("server_ip")
-	if groupID == "" || serverIP == "" {
-		http.Error(w, "group_id and server_ip query parameters are required", http.StatusBadRequest)
+	if serverIP == "" {
+		http.Error(w, "server_ip query parameter is required", http.StatusBadRequest)
 		return
 	}
 
-	// account_id comes only from the resolved token (JWT claim or api_key
-	// cache lookup), never a query param — a caller can't connect "as" a
-	// different account just by knowing their group_id (see authjwt
-	// package doc for why group membership isn't itself a JWT claim).
+	// group_id comes only from server-side resolution by account_id, never
+	// from the client — a caller can't connect "as" a different group just
+	// by asking for one (there's no field left to ask with at all).
+	groupID, err := h.members.ActiveGroup(r.Context(), accountID)
+	if errors.Is(err, store.ErrNoActiveGroup) {
+		h.log.Warn("connect refused: no active group", "account_id", accountID)
+		http.Error(w, "account has no active sharing group", http.StatusForbidden)
+		return
+	}
+	if err != nil {
+		h.log.Error("active group resolve failed", "err", err, "account_id", accountID)
+		http.Error(w, "active group resolve failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Still checked, not just trusted from the active-group cache: a
+	// second, independent signal against the same staleness class
+	// IsMember already guards everywhere else (see its own doc).
 	member, err := h.members.IsMember(r.Context(), groupID, accountID)
 	if err != nil {
 		h.log.Error("group membership check failed", "err", err, "account_id", accountID, "group_id", groupID)

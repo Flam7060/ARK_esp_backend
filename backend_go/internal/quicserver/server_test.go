@@ -26,8 +26,9 @@ import (
 )
 
 type fakeGroupChecker struct {
-	members map[string]bool
-	err     error
+	members      map[string]bool
+	activeGroups map[string]string // accountID -> groupID
+	err          error
 }
 
 func (f *fakeGroupChecker) IsMember(_ context.Context, groupID, accountID string) (bool, error) {
@@ -35,6 +36,17 @@ func (f *fakeGroupChecker) IsMember(_ context.Context, groupID, accountID string
 		return false, f.err
 	}
 	return f.members[groupID+"/"+accountID], nil
+}
+
+func (f *fakeGroupChecker) ActiveGroup(_ context.Context, accountID string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	groupID, ok := f.activeGroups[accountID]
+	if !ok {
+		return "", store.ErrNoActiveGroup
+	}
+	return groupID, nil
 }
 
 type noopEntityWriter struct{}
@@ -142,9 +154,9 @@ func dial(t *testing.T, addr string) *quic.Stream {
 	return stream
 }
 
-func doHandshake(t *testing.T, stream *quic.Stream, token, groupID, serverIP string) handshakeResponse {
+func doHandshake(t *testing.T, stream *quic.Stream, token, serverIP string) handshakeResponse {
 	t.Helper()
-	req, err := json.Marshal(handshakeRequest{Token: token, GroupID: groupID, ServerIP: serverIP})
+	req, err := json.Marshal(handshakeRequest{Token: token, ServerIP: serverIP})
 	if err != nil {
 		t.Fatalf("marshal handshake: %v", err)
 	}
@@ -169,38 +181,63 @@ func TestHandshake_InvalidTokenRejected(t *testing.T) {
 	addr := startTestServer(t, h, verifier, &fakeGroupChecker{})
 
 	stream := dial(t, addr)
-	resp := doHandshake(t, stream, "garbage-token", "g1", "1.2.3.4:7777")
+	resp := doHandshake(t, stream, "garbage-token", "1.2.3.4:7777")
 
 	if resp.OK {
 		t.Fatal("expected handshake to be rejected for an invalid token")
 	}
 }
 
-func TestHandshake_NotAMemberRejected(t *testing.T) {
+func TestHandshake_NoActiveGroupRejected(t *testing.T) {
 	verifier, priv := testVerifier(t)
 	h := hub.New(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	addr := startTestServer(t, h, verifier, &fakeGroupChecker{members: map[string]bool{}})
+	// No activeGroups entry for acct-1 at all -- token resolves fine, but
+	// there's no group_id on the wire to trust anymore and none resolved
+	// server-side either.
+	addr := startTestServer(t, h, verifier, &fakeGroupChecker{})
 
 	stream := dial(t, addr)
 	token := signToken(t, priv, "acct-1")
-	resp := doHandshake(t, stream, token, "g1", "1.2.3.4:7777")
+	resp := doHandshake(t, stream, token, "1.2.3.4:7777")
+
+	if resp.OK {
+		t.Fatal("expected handshake to be rejected for an account with no active group")
+	}
+}
+
+func TestHandshake_NotAMemberRejected(t *testing.T) {
+	verifier, priv := testVerifier(t)
+	h := hub.New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// Active group resolves to g1, but the membership set says acct-1
+	// isn't actually in it (out of sync, e.g. mid-leave).
+	addr := startTestServer(t, h, verifier, &fakeGroupChecker{
+		activeGroups: map[string]string{"acct-1": "g1"},
+		members:      map[string]bool{},
+	})
+
+	stream := dial(t, addr)
+	token := signToken(t, priv, "acct-1")
+	resp := doHandshake(t, stream, token, "1.2.3.4:7777")
 
 	if resp.OK {
 		t.Fatal("expected handshake to be rejected for a non-member")
 	}
 }
 
-func TestHandshake_MissingFieldsRejected(t *testing.T) {
+func TestHandshake_MissingServerIPRejected(t *testing.T) {
 	verifier, priv := testVerifier(t)
 	h := hub.New(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	addr := startTestServer(t, h, verifier, &fakeGroupChecker{members: map[string]bool{"g1/acct-1": true}})
+	addr := startTestServer(t, h, verifier, &fakeGroupChecker{
+		activeGroups: map[string]string{"acct-1": "g1"},
+		members:      map[string]bool{"g1/acct-1": true},
+	})
 
 	stream := dial(t, addr)
 	token := signToken(t, priv, "acct-1")
-	resp := doHandshake(t, stream, token, "", "1.2.3.4:7777") // group_id missing
+	resp := doHandshake(t, stream, token, "") // server_ip missing
 
 	if resp.OK {
-		t.Fatal("expected handshake to be rejected for a missing group_id")
+		t.Fatal("expected handshake to be rejected for a missing server_ip")
 	}
 }
 
@@ -212,19 +249,22 @@ func TestHandshake_MissingFieldsRejected(t *testing.T) {
 func TestEndToEnd_SightingBroadcastsToOtherQUICClient(t *testing.T) {
 	verifier, priv := testVerifier(t)
 	h := hub.New(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	members := &fakeGroupChecker{members: map[string]bool{
-		"g1/acct-1": true,
-		"g1/acct-2": true,
-	}}
+	members := &fakeGroupChecker{
+		activeGroups: map[string]string{"acct-1": "g1", "acct-2": "g1"},
+		members: map[string]bool{
+			"g1/acct-1": true,
+			"g1/acct-2": true,
+		},
+	}
 	addr := startTestServer(t, h, verifier, members)
 
 	senderStream := dial(t, addr)
-	if resp := doHandshake(t, senderStream, signToken(t, priv, "acct-1"), "g1", "10.0.0.1:7777"); !resp.OK {
+	if resp := doHandshake(t, senderStream, signToken(t, priv, "acct-1"), "10.0.0.1:7777"); !resp.OK {
 		t.Fatalf("sender handshake rejected: %s", resp.Error)
 	}
 
 	watcherStream := dial(t, addr)
-	if resp := doHandshake(t, watcherStream, signToken(t, priv, "acct-2"), "g1", "10.0.0.1:7777"); !resp.OK {
+	if resp := doHandshake(t, watcherStream, signToken(t, priv, "acct-2"), "10.0.0.1:7777"); !resp.OK {
 		t.Fatalf("watcher handshake rejected: %s", resp.Error)
 	}
 
