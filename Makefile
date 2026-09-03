@@ -1,6 +1,6 @@
-# Обёртка над `docker compose` для частых команд разработки. Ничего из
-# этого не собирает и не деплоит — только удобные шорткаты поверх того же
-# docker-compose.yml, которым и так пользуется прод-запуск.
+# Обёртка над `docker compose` для частых команд разработки, плюс сам
+# bring-up/tear-down (deploy/deploy.sh, deploy/purge.sh) — те же шорткаты
+# поверх docker-compose.yml, которым и так пользуется прод-запуск.
 #
 # ARGS пробрасывается как есть в команды, принимающие произвольные флаги
 # (create-admin, alembic, exec): `make create-admin ARGS="--username root"`.
@@ -13,17 +13,20 @@ GO_SVC        := backend_go
 DB_SVC        := postgres
 REDIS_SVC     := redis
 
-.PHONY: help up down restart build rebuild rebuild-python rebuild-go ps \
+.PHONY: help deploy up down restart build rebuild rebuild-python rebuild-go ps \
         logs logs-python logs-go logs-db logs-redis \
         migrate migrate-status make-migration create-admin \
         shell-python shell-go psql redis-cli \
-        test down-v
+        test down-v clean purge
 
 help: ## Список команд с описанием
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 ## --- Жизненный цикл стека ---
+
+deploy: ## Развернуть с нуля на свежем VPS (deploy/deploy.sh) — генерит .env/ключи если их ещё нет, поднимает стек. Идемпотентно, безопасно перезапускать после git pull
+	./deploy/deploy.sh
 
 up: ## Поднять стек в фоне НА УЖЕ СОБРАННЫХ образах — правил код/Dockerfile? нужен make rebuild, не up
 	$(COMPOSE) up -d
@@ -33,6 +36,12 @@ down: ## Остановить и убрать контейнеры (volume с д
 
 down-v: ## Как down, но ещё и стирает volume с данными Postgres — ДЕСТРУКТИВНО
 	$(COMPOSE) down -v
+
+clean: ## Снести контейнеры и локально собранные образы — БД (volume), .env, keys/ остаются нетронуты. Для чистого редеплоя кода без потери данных/секретов
+	$(COMPOSE) down --rmi local --remove-orphans
+
+purge: ## ПОЛНЫЙ снос: контейнеры, volumes (БД), образы, .env, keys/ — обратно в состояние чистого VPS. НЕОБРАТИМО, спросит подтверждение (deploy/purge.sh)
+	./deploy/purge.sh
 
 restart: ## Перезапустить только backend_python (миграции прогонятся заново при старте)
 	$(COMPOSE) restart $(PYTHON_SVC)
