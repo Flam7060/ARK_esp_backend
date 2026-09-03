@@ -1,6 +1,6 @@
 // Package protocol defines the JSON wire format exchanged over the
-// ark_relay WebSocket, per telemetry-api-v1.md §7.3. The same shape is used
-// symmetrically client->relay and relay->subscribers.
+// ark_relay QUIC stream, per telemetry-api-v1.md §7.3. The same shape is
+// used symmetrically client->relay and relay->subscribers.
 package protocol
 
 import (
@@ -255,7 +255,7 @@ type Outbound struct {
 	Entities            []Entity `json:"entities,omitempty"`
 }
 
-// Decode parses one WebSocket text frame into an Inbound message.
+// Decode parses one length-prefixed stream frame into an Inbound message.
 func Decode(raw []byte) (Inbound, error) {
 	var m Inbound
 	if err := json.Unmarshal(raw, &m); err != nil {
@@ -264,7 +264,7 @@ func Decode(raw []byte) (Inbound, error) {
 	return m, nil
 }
 
-// Encode serializes an Outbound message into a WebSocket text frame.
+// Encode serializes an Outbound message into one stream frame's payload.
 func Encode(m Outbound) ([]byte, error) {
 	b, err := json.Marshal(m)
 	if err != nil {

@@ -19,7 +19,7 @@ import (
 
 // fakeKeyResolver answers Resolve from an in-memory map, so these tests
 // never touch a real Redis connection -- same pattern as
-// wsserver.fakeGroupChecker.
+// quicserver.fakeGroupChecker.
 type fakeKeyResolver struct {
 	accounts map[string]string // token -> account_id
 }

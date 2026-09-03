@@ -64,8 +64,9 @@ services:
       - "${BACKEND_GO_QUIC_PORT:-8443}:8443/udp"
     environment:
       RELAY_LISTEN_ADDR: ":8081"
-      # QUIC transport for arkmultitool's Http3Publisher (DTO-sharing plan
-      # — same protocol as the WS path, see internal/quicserver). No
+      # QUIC — единственный транспорт сайтингов (arkmultitool's
+      # Http3Publisher, см. internal/quicserver); на :8081 остались только
+      # AsyncAPI-доки и healthz. No
       # RELAY_TLS_CERT_FILE/KEY set here: cmd/relay falls back to an
       # ephemeral self-signed dev cert, loudly logged — fine for local
       # compose, never for a real deployment (mount a real cert/key pair

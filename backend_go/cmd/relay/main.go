@@ -1,8 +1,12 @@
-// Command relay runs ark_relay: the live WebSocket fan-out of ESP
-// sightings between clients of the same tribe, per telemetry-api-v1.md §7.
-// It holds no durable state of its own — every sighting it relays is also
-// written to the shared Redis instance ark_backend reads (§8.1); Postgres
-// is never touched from here.
+// Command relay runs ark_relay: the live QUIC fan-out of ESP sightings
+// between clients of the same tribe, per telemetry-api-v1.md §7. It holds
+// no durable state of its own — every sighting it relays is also written
+// to the shared Redis instance ark_backend reads (§8.1); Postgres is never
+// touched from here.
+//
+// Two listeners, only one of which carries sightings: QUIC (internal/
+// quicserver, the sole transport) and a plain HTTP server that exists
+// purely to serve the AsyncAPI spec at /docs/ and /healthz.
 package main
 
 import (
@@ -27,7 +31,6 @@ import (
 	"ark_relay/internal/store"
 	"ark_relay/internal/streamproducer"
 	"ark_relay/internal/tokenauth"
-	"ark_relay/internal/wsserver"
 )
 
 func main() {
@@ -73,33 +76,33 @@ func run(log *slog.Logger) error {
 	// GET, backed by the same rdb this process already holds -- see
 	// internal/tokenauth's package doc for why JWT is tried first).
 	resolver := tokenauth.New(verifier, apikeycache.New(rdb))
-	handler := wsserver.New(h, resolver, es, es, sp, members, log,
-		cfg.PingInterval, cfg.PongWait, cfg.WriteWait, cfg.MaxEntitiesPerMessage, cfg.MaxMessageBytes)
 
 	revocationCtx, stopRevocation := context.WithCancel(context.Background())
 	defer stopRevocation()
 	go revocation.Watch(revocationCtx, rdb, h, log)
 
+	// QUIC — единственный транспорт сайтингов, поэтому он поднимается
+	// безусловно: config.Load подставляет непустой дефолт даже на явно
+	// пустой RELAY_QUIC_LISTEN_ADDR, так что "процесс поднялся, но возить
+	// трафик нечем" недостижимо по построению.
 	quicCtx, stopQUIC := context.WithCancel(context.Background())
 	defer stopQUIC()
 	quicErr := make(chan error, 1)
-	if cfg.QUICListenAddr != "" {
-		tlsConf, err := loadOrGenerateQUICTLS(cfg, log)
-		if err != nil {
-			return err
-		}
-		qs := quicserver.New(h, resolver, es, es, sp, members, log,
-			cfg.PingInterval, cfg.PongWait, cfg.WriteWait, cfg.MaxEntitiesPerMessage, cfg.MaxMessageBytes)
-		go func() {
-			log.Info("ark_relay QUIC listening", "addr", cfg.QUICListenAddr)
-			quicErr <- qs.ListenAndServe(quicCtx, cfg.QUICListenAddr, tlsConf)
-		}()
+	tlsConf, err := loadOrGenerateQUICTLS(cfg, log)
+	if err != nil {
+		return err
 	}
+	qs := quicserver.New(h, resolver, es, es, sp, members, log,
+		cfg.PingInterval, cfg.PongWait, cfg.WriteWait, cfg.MaxEntitiesPerMessage, cfg.MaxMessageBytes)
+	go func() {
+		log.Info("ark_relay QUIC listening", "addr", cfg.QUICListenAddr)
+		quicErr <- qs.ListenAndServe(quicCtx, cfg.QUICListenAddr, tlsConf)
+	}()
 
+	// Отдельный HTTP-слушатель, сайтинги через него не ходят вообще:
+	// только AsyncAPI-спека + web-viewer (статика, правится руками вместе
+	// с internal/protocol/message.go — автогена здесь нет) и healthcheck.
 	mux := http.NewServeMux()
-	mux.Handle("/v1/relay/ws", handler)
-	// AsyncAPI-спека + web-viewer — статика, не код: правится руками
-	// вместе с internal/protocol/message.go, никакого автогена здесь нет.
 	mux.Handle("/docs/", http.StripPrefix("/docs/", http.FileServer(http.Dir(cfg.DocsDir))))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := rdb.Ping(r.Context()).Err(); err != nil {
@@ -117,7 +120,7 @@ func run(log *slog.Logger) error {
 
 	serveErr := make(chan error, 1)
 	go func() {
-		log.Info("ark_relay listening", "addr", cfg.ListenAddr)
+		log.Info("ark_relay docs/healthz listening", "addr", cfg.ListenAddr)
 		serveErr <- srv.ListenAndServe()
 	}()
 
@@ -141,12 +144,9 @@ func run(log *slog.Logger) error {
 		stopQUIC() // unblocks quicserver's Accept loop the same way srv.Shutdown does for HTTP below
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		// Stop accepting new connections and let in-flight ones finish
-		// their close handshake before the process exits — the WS
-		// upgrader has already handed connections to hub.Client.Run, so
-		// Shutdown here only stops new HTTP/upgrade traffic; existing
-		// sockets close on their own read/write errors or client-driven
-		// close, which is acceptable for a best-effort relay.
+		// Живые QUIC-соединения уже остановлены stopQUIC выше; Shutdown
+		// здесь закрывает только docs/healthz-слушатель, на котором
+		// долгоживущих соединений нет по определению.
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			return err
 		}

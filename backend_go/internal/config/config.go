@@ -14,14 +14,18 @@ import (
 // Config is the fully-resolved, validated runtime configuration for one
 // ark_relay process.
 type Config struct {
-	// ListenAddr is the TCP address the WebSocket HTTP server binds to.
+	// ListenAddr is the TCP address of the plain HTTP server that serves
+	// /docs/* and /healthz. No sighting traffic goes through it — that is
+	// QUICListenAddr's job, and has been since the WebSocket transport was
+	// removed.
 	ListenAddr string
 
 	// QUICListenAddr is the UDP address the QUIC transport
-	// (internal/quicserver) binds to — arkmultitool's Http3Publisher talks
-	// to this, not ListenAddr. Empty disables the QUIC listener entirely
-	// (e.g. a deployment not ready to open a UDP port yet); WS keeps
-	// working either way — QUIC is an additional path, not a replacement.
+	// (internal/quicserver) binds to — the only path sightings travel on;
+	// arkmultitool's Http3Publisher talks to this, not ListenAddr. Never
+	// legitimately empty: cmd/relay starts this listener unconditionally,
+	// and Load's default below is what guarantees there is an address to
+	// start it on.
 	QUICListenAddr string
 
 	// TLSCertFile/TLSKeyFile are the PEM cert/key QUIC serves — QUIC
@@ -67,8 +71,8 @@ type Config struct {
 	// per message.
 	MaxEntitiesPerMessage int
 
-	// MaxMessageBytes bounds the raw WebSocket frame size read from a
-	// client connection.
+	// MaxMessageBytes bounds the raw frame size read from a client
+	// connection (the length-prefix cap in quicserver/frame.go).
 	MaxMessageBytes int64
 
 	// DocsDir serves the hand-maintained AsyncAPI spec + viewer at
@@ -84,7 +88,10 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		ListenAddr:            getEnv("RELAY_LISTEN_ADDR", ":8081"),
-		QUICListenAddr:        getEnv("RELAY_QUIC_LISTEN_ADDR", ""),
+		// Дефолт непустой намеренно: QUIC — единственный транспорт
+		// сайтингов, и getEnv подставляет дефолт даже на явно пустое
+		// значение, так что выключить транспорт через окружение нельзя.
+		QUICListenAddr:        getEnv("RELAY_QUIC_LISTEN_ADDR", ":8443"),
 		TLSCertFile:           getEnv("RELAY_TLS_CERT_FILE", ""),
 		TLSKeyFile:            getEnv("RELAY_TLS_KEY_FILE", ""),
 		RedisAddr:             getEnv("RELAY_REDIS_ADDR", "localhost:6379"),

@@ -28,7 +28,7 @@ router = APIRouter(tags=["status"])
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 def docs_portal() -> str:
     """Единая точка входа в документацию: REST (OpenAPI, генерируется
-    FastAPI из кода на каждый запрос — всегда актуален сам) и WebSocket-
+    FastAPI из кода на каждый запрос — всегда актуален сам) и QUIC-
     протокол ark_relay (AsyncAPI, статика — обновляется руками вместе с
     ark_relay/internal/protocol/message.go, см. docs/asyncapi.yaml там же).
     Ссылки, а не слитый в один UI контент: OpenAPI и AsyncAPI — разные
@@ -40,7 +40,7 @@ def docs_portal() -> str:
 <h1>{config.app.TITLE}</h1>
 <ul>
   <li><a href="/docs">REST API (OpenAPI/Swagger UI) — backend_python</a></li>
-  <li><a href="{config.app.RELAY_DOCS_URL}">WebSocket protocol (AsyncAPI) — backend_go</a></li>
+  <li><a href="{config.app.RELAY_DOCS_URL}">QUIC protocol (AsyncAPI) — backend_go</a></li>
 </ul>
 </body></html>"""
 

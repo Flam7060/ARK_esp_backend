@@ -1,4 +1,4 @@
-// Package hub keeps the in-memory registry of live WebSocket connections,
+// Package hub keeps the in-memory registry of live client connections,
 // grouped by sharing group AND game server, and fans "sighting" messages
 // out to every other connection in the same room. Nothing here is durable
 // — doc §7.2: "Не хранит состояние дольше жизни соединения на своей

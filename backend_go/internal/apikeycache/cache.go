@@ -33,7 +33,7 @@ var ErrNotFound = errors.New("apikeycache: key not found or expired")
 
 // getter is the subset of *redis.Client this package needs -- narrowed so
 // tests can substitute a fake without a real Redis connection, the same
-// pattern wsserver.GroupChecker already uses for group membership.
+// pattern quicserver.GroupChecker already uses for group membership.
 type getter interface {
 	Get(ctx context.Context, key string) *redis.StringCmd
 }

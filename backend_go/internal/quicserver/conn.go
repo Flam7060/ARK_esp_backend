@@ -7,9 +7,8 @@ import (
 )
 
 // quicConn adapts one QUIC stream to hub.Conn, framing each message with a
-// 4-byte length prefix (frame.go) — the QUIC-side mirror of wsserver's
-// wsConn, so hub.Client's dedup/broadcast logic runs unchanged over either
-// transport.
+// 4-byte length prefix (frame.go) — the single place that knows about this
+// framing, so hub.Client's dedup/broadcast logic stays transport-agnostic.
 type quicConn struct {
 	stream   *quic.Stream
 	maxBytes int64

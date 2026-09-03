@@ -8,10 +8,9 @@ import (
 )
 
 // lengthPrefixSize is the width of the frame-length header: a raw QUIC
-// stream is just a byte pipe, unlike a WebSocket connection which frames
-// messages for us — every message written to a stream needs its own
-// explicit boundary so the reader knows where one JSON payload ends and
-// the next begins.
+// stream is just a byte pipe with no message framing of its own, so every
+// message written to it needs an explicit boundary — otherwise the reader
+// has no way to know where one JSON payload ends and the next begins.
 const lengthPrefixSize = 4
 
 // readFrame reads one length-prefixed frame from r. maxBytes bounds the

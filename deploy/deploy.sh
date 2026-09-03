@@ -158,7 +158,7 @@ cat <<'EOF'
      them closed):
 
        sudo ufw allow 8000/tcp   # backend_python API
-       sudo ufw allow 8081/tcp   # backend_go WS + AsyncAPI docs
+       sudo ufw allow 8081/tcp   # backend_go AsyncAPI docs + healthz
        sudo ufw allow 8443/udp   # backend_go QUIC (arkmultitool sharing)
 
   3. Point clients at this VPS instead of localhost:

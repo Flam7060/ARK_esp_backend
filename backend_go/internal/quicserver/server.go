@@ -1,11 +1,10 @@
-// Package quicserver is the QUIC transport for ark_relay's sighting
-// protocol — the server-side counterpart to arkmultitool's Http3Publisher
-// (DTO-sharing plan: "real transport explicitly deferred to a future
-// QUIC/HTTP-3 implementation"). It carries exactly the same
-// protocol.Inbound/Outbound JSON messages as internal/wsserver's
-// WebSocket path, over a length-prefixed QUIC stream instead of WS frames
-// — hub.Client's dedup/broadcast/revocation logic is shared unchanged
-// between both transports (see internal/hub.Conn).
+// Package quicserver is the transport for ark_relay's sighting protocol —
+// the only one, and the server-side counterpart to arkmultitool's
+// Http3Publisher (DTO-sharing plan: "real transport explicitly deferred to
+// a future QUIC/HTTP-3 implementation"). It carries protocol.Inbound/
+// Outbound JSON messages over a length-prefixed QUIC stream; hub.Client's
+// dedup/broadcast/revocation logic sits behind hub.Conn and knows nothing
+// about this framing.
 //
 // This is bare QUIC (github.com/quic-go/quic-go), not HTTP/3: a sighting
 // connection is a long-lived, bidirectional, low-overhead stream of small
@@ -30,22 +29,22 @@ import (
 	"ark_relay/internal/tokenauth"
 )
 
-// GroupChecker mirrors wsserver.GroupChecker — kept as its own interface
-// (not imported from wsserver) so quicserver has no import-time dependency
-// on the WS transport package; both are peers under cmd/relay, neither
-// should need the other.
+// GroupChecker is the subset of *store.GroupMembership Server depends on
+// — narrowed so tests can substitute a fake without a real Redis
+// connection.
 type GroupChecker interface {
 	IsMember(ctx context.Context, groupID, accountID string) (bool, error)
 	// ActiveGroup resolves the group this account currently shares into,
-	// purely from account_id (see wsserver.GroupChecker's identical
-	// method for why). Returns store.ErrNoActiveGroup if unset.
+	// purely from account_id — the client never states a group_id at all
+	// (see handshakeRequest's own doc comment). Returns
+	// store.ErrNoActiveGroup if unset.
 	ActiveGroup(ctx context.Context, accountID string) (string, error)
 }
 
 // Server accepts QUIC connections and hands each one's single stream to
-// the Hub after the same auth/authorization checks wsserver.Handler
-// applies. Field-for-field mirror of wsserver.Handler by design — same
-// checks, different transport.
+// the Hub, but only after the handshake below has verified the caller's
+// token and their live sharing-group membership — nothing reaches the Hub
+// unauthenticated.
 type Server struct {
 	hub      *hub.Hub
 	resolver *tokenauth.Resolver
@@ -62,9 +61,8 @@ type Server struct {
 	maxBytes     int64
 }
 
-// New builds a Server. Deadlines/limits are the same config values passed
-// to wsserver.New — one set of tuning knobs for both transports, not two
-// to keep in sync by hand.
+// New builds a Server. Deadlines/limits come from config, not literals,
+// so retuning them is a config edit.
 func New(h *hub.Hub, resolver *tokenauth.Resolver, es hub.EntityWriter, hc hub.HashCache, sp streamproducer.Publisher,
 	members GroupChecker, log *slog.Logger,
 	pingInterval, pongWait, writeWait time.Duration, maxEntities int, maxBytes int64,
@@ -77,7 +75,7 @@ func New(h *hub.Hub, resolver *tokenauth.Resolver, es hub.EntityWriter, hc hub.H
 }
 
 // ListenAndServe binds addr (UDP) with tlsConf — QUIC mandates TLS 1.3, so
-// unlike the WS listener there is no plaintext option — and blocks
+// there is no plaintext option at all — and blocks
 // accepting connections until ctx is cancelled. Each accepted connection is
 // served in its own goroutine and never blocks Accept for the next one.
 func (s *Server) ListenAndServe(ctx context.Context, addr string, tlsConf *tls.Config) error {
@@ -146,10 +144,9 @@ func (s *Server) serveConn(ctx context.Context, conn *quic.Conn) {
 }
 
 // handshake reads and validates the one handshakeRequest frame a client
-// must send before any sighting traffic, applying the exact same checks as
-// wsserver.Handler.ServeHTTP (JWT verify, then live group-membership
-// check) — fail closed before the stream is ever handed to hub.Client, the
-// same invariant the WS path keeps before Upgrade.
+// must send before any sighting traffic: token verify, then a live
+// group-membership check. Fail closed — every rejection happens before the
+// stream is ever handed to hub.Client.
 func (s *Server) handshake(stream *quic.Stream) (accountID, groupID, serverIP string, ok bool) {
 	if err := stream.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		return "", "", "", false
@@ -191,8 +188,9 @@ func (s *Server) handshake(stream *quic.Stream) (accountID, groupID, serverIP st
 		return "", "", "", false
 	}
 
-	// Still checked, not just trusted from the active-group cache -- see
-	// wsserver.Handler.ServeHTTP's identical comment.
+	// Still checked, not just trusted from the active-group cache: a
+	// second, independent signal against the same staleness class
+	// IsMember already guards everywhere else (see its own doc).
 	member, err := s.members.IsMember(stream.Context(), groupID, accountID)
 	if err != nil {
 		s.log.Error("quicserver: group membership check failed", "err", err, "account_id", accountID, "group_id", groupID)

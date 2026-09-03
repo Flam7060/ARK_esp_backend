@@ -12,7 +12,7 @@ import (
 // sharing group" against a Redis SET backend_python's sharing_service.py
 // keeps in sync with Postgres group_member on every join/leave/kick (doc:
 // DTO-sharing plan §5) -- checked here, not against Postgres directly, so
-// a WS connect attempt doesn't cost a round trip through a service the
+// a connect attempt doesn't cost a round trip through a service the
 // relay otherwise never talks to.
 type GroupMembership struct {
 	rdb *redis.Client
@@ -47,8 +47,8 @@ var ErrNoActiveGroup = errors.New("store: account has no active group")
 // ActiveGroup resolves "which group does this account's sharing route
 // into" purely from account_id -- the client no longer states, and the
 // relay no longer trusts, a client-declared group_id at all (see
-// wsserver.Handler.ServeHTTP / quicserver.Server.handshake, both call
-// this instead of reading a group_id off the wire). Backed by
+// quicserver.Server.handshake, which calls this instead of reading a
+// group_id off the wire). Backed by
 // core/group_cache.py's RedisGroupCache.set_active_group/
 // clear_active_group, mirroring Postgres account.active_group_id.
 func (g *GroupMembership) ActiveGroup(ctx context.Context, accountID string) (string, error) {

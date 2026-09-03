@@ -4,13 +4,13 @@ import "time"
 
 // Conn abstracts one framed, full-duplex transport under a Client — one
 // logical message per ReadMessage/WriteMessage call, whatever the wire
-// format underneath actually is (a WebSocket text frame, or a
-// length-prefixed QUIC stream — see internal/wsserver and
-// internal/quicserver for the two adapters). Client's dedup/broadcast/
+// format underneath actually is (today: a length-prefixed QUIC stream,
+// see internal/quicserver — the only adapter). Client's dedup/broadcast/
 // revocation logic is written once against this interface and does not
 // know or care which transport carried a given connection; that keeps the
 // DTO-sharing plan's "Publisher interface, transport-agnostic" principle
-// on the server side too, not just the arkmultitool client.
+// on the server side too, not just the arkmultitool client — and is what
+// made removing the WebSocket transport a matter of deleting one adapter.
 type Conn interface {
 	// ReadMessage blocks for the next complete message. It returns an
 	// error on any read failure, protocol violation, or closed connection

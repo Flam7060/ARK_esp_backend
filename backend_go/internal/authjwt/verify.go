@@ -15,8 +15,8 @@
 // kick), and re-issuing a token on every membership edit is exactly the
 // coupling the group<->relay boundary is meant to avoid. Instead: the
 // active group is resolved server-side from account_id alone (never a
-// client-declared group_id) and server_ip travels as a WS connect
-// parameter (see wsserver.Handler), checked against a live Redis
+// client-declared group_id) and server_ip travels in the connection's
+// handshake frame (see quicserver.handshakeRequest), checked against a live Redis
 // membership set on every connect (see internal/hub), and per-sighting
 // game data (team/tribe/reporter character)
 // travels in the message body itself (internal/protocol.Entity/Inbound) —

@@ -1,5 +1,5 @@
-// Package tokenauth is the single point where wsserver and quicserver
-// turn a client-presented bearer credential into an account_id, accepting
+// Package tokenauth is the single point where quicserver turns a
+// client-presented bearer credential into an account_id, accepting
 // either of the two shapes core/account_auth.py's get_current_account
 // already accepts on the HTTP side: an RS256 JWT (verified offline,
 // internal/authjwt -- no round trip anywhere) or a self-service api_key
@@ -20,7 +20,7 @@ import (
 
 // KeyResolver is the subset of apikeycache.Cache this package depends on
 // -- narrowed so tests can substitute a fake without a real Redis
-// connection, same pattern as wsserver.GroupChecker.
+// connection, same pattern as quicserver.GroupChecker.
 type KeyResolver interface {
 	Resolve(ctx context.Context, token string) (accountID string, err error)
 }

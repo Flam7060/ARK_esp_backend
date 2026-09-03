@@ -224,6 +224,27 @@ func TestHandshake_NotAMemberRejected(t *testing.T) {
 	}
 }
 
+// Пустой токен отбивается до резолва, на той же проверке обязательных
+// полей, что и пустой server_ip -- отдельным тестом, потому что это
+// единственный отказ авторизации, который раньше покрывался только со
+// стороны удалённого WS-транспорта (его ServeHTTP отвечал 401 на
+// отсутствующий Bearer).
+func TestHandshake_EmptyTokenRejected(t *testing.T) {
+	verifier, _ := testVerifier(t)
+	h := hub.New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	addr := startTestServer(t, h, verifier, &fakeGroupChecker{
+		activeGroups: map[string]string{"acct-1": "g1"},
+		members:      map[string]bool{"g1/acct-1": true},
+	})
+
+	stream := dial(t, addr)
+	resp := doHandshake(t, stream, "", "1.2.3.4:7777") // token missing
+
+	if resp.OK {
+		t.Fatal("expected handshake to be rejected for an empty token")
+	}
+}
+
 func TestHandshake_MissingServerIPRejected(t *testing.T) {
 	verifier, priv := testVerifier(t)
 	h := hub.New(slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -244,8 +265,7 @@ func TestHandshake_MissingServerIPRejected(t *testing.T) {
 // TestEndToEnd_SightingBroadcastsToOtherQUICClient exercises the whole
 // path for real: two QUIC clients authenticate into the same
 // (group_id, server_ip) room, one sends a sighting batch, and the other
-// receives it over the wire — the same guarantee the WS path already had,
-// now proven for the QUIC transport hub.Client shares with it.
+// receives it over the wire.
 func TestEndToEnd_SightingBroadcastsToOtherQUICClient(t *testing.T) {
 	verifier, priv := testVerifier(t)
 	h := hub.New(slog.New(slog.NewTextHandler(io.Discard, nil)))

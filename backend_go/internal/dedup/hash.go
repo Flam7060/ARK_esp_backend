@@ -3,7 +3,7 @@
 // tamed dinos) -- the hash exists to avoid pushing a Redis Stream fact for
 // something already known and unchanged, not for security (see ContentHash
 // doc). Used by internal/hub to gate internal/streamproducer writes; the
-// live WS broadcast and Redis HASH+TTL view (internal/store) never consult
+// live broadcast and Redis HASH+TTL view (internal/store) never consult
 // this package -- they show "what's here right now" regardless of whether
 // it's new information.
 package dedup

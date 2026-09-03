@@ -5,7 +5,7 @@ import (
 )
 
 // newRegisteredClient builds a minimal Client good enough to register with
-// a Hub and receive broadcasts — no real websocket connection, send is a
+// a Hub and receive broadcasts — no real transport connection, send is a
 // buffered channel a test can drain directly.
 func newRegisteredClient(h *Hub, accountID, groupID, serverIP string) *Client {
 	c := &Client{

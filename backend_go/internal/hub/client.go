@@ -37,8 +37,8 @@ type HashCache interface {
 // client-side in arkmultitool's ChangeFilter.
 const streamKeyframe = 5 * time.Minute
 
-// Client is one authenticated connection, WebSocket or QUIC (see Conn):
-// one goroutine reading, one writing (doc §7.1 — "горутина на соединение"),
+// Client is one authenticated connection (see Conn): one goroutine
+// reading, one writing (doc §7.1 — "горутина на соединение"),
 // talking to each other only through the buffered send channel so a slow
 // writer can never block the reader mid-frame.
 type Client struct {
@@ -63,16 +63,15 @@ type Client struct {
 	closeOnce sync.Once
 }
 
-// NewClient wraps an already-authenticated Conn (WebSocket or QUIC) for
-// accountID, scoped to the (groupID, serverIP) room. Call Run to start
-// serving; Run blocks until the connection ends.
+// NewClient wraps an already-authenticated Conn for accountID, scoped to
+// the (groupID, serverIP) room. Call Run to start serving; Run blocks
+// until the connection ends.
 //
-// Max frame size is deliberately not a Client concern: each transport
-// adapter enforces its own (websocket.Upgrader.SetReadLimit for WS, a
-// length-prefix cap for QUIC — see wsserver/quicserver) at the point where
-// it actually knows how to reject an oversized frame before buffering it
-// whole, which Client's transport-agnostic Conn interface has no way to
-// express uniformly.
+// Max frame size is deliberately not a Client concern: the transport
+// adapter enforces its own (quicserver's length-prefix cap) at the point
+// where it actually knows how to reject an oversized frame before
+// buffering it whole, which Client's transport-agnostic Conn interface has
+// no way to express uniformly.
 func NewClient(conn Conn, h *Hub, es EntityWriter, hc HashCache, sp streamproducer.Publisher, log *slog.Logger,
 	accountID, groupID, serverIP string,
 	pingInterval, pongWait, writeWait time.Duration, maxEntities int,
@@ -124,7 +123,7 @@ func (c *Client) Run(ctx context.Context) {
 func (c *Client) closeSlow() {
 	c.closeOnce.Do(func() {
 		// nil guard: only real production callers go through NewClient
-		// (always a real Conn, WS or QUIC), but a test building a *Client
+		// (always a real Conn), but a test building a *Client
 		// literal to exercise Hub routing/dedup logic shouldn't need to
 		// stand up a real socket just to be closeSlow-safe.
 		if c.conn != nil {
@@ -139,11 +138,11 @@ func (c *Client) readPump(ctx context.Context) {
 
 	for {
 		// Deadline reset before every read, not once at start: liveness is
-		// "heard anything at all within pongWait", judged the same way for
-		// both transports — a sighting batch counts exactly like a pong,
-		// since either one proves the connection is alive. This replaces
-		// gorilla's WS-specific control-frame pong handler, which QUIC has
-		// no equivalent of.
+		// "heard anything at all within pongWait" —
+		// a sighting batch counts exactly like a pong,
+		// since either one proves the connection is alive. QUIC offers no
+		// transport-level control frame to hang a pong handler off,
+		// so liveness is judged here instead.
 		if err := c.conn.SetReadDeadline(time.Now().Add(c.pongWait)); err != nil {
 			return
 		}
