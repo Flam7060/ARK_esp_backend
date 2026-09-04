@@ -25,6 +25,10 @@ info:
     HTTP-апгрейда и WS-фреймов — один bidi-стрим с 4-байтным префиксом
     длины и явным handshake-фреймом вместо заголовков/query.
 
+    v6: Entity.steam_id — настоящий SteamID64 (offset найден вживую в
+    2026-09), platform_id в ark:stream:player_sighting предпочитает его
+    stable_id, когда задан.
+
 servers:
   relay:
     host: 'localhost:8443'
@@ -271,6 +275,15 @@ components:
           type: integer
           format: uint64
           description: linked_player_data_id, только для cat == player. Не Steam id. Без него player не публикуется в ark:stream:player_sighting.
+        steam_id:
+          type: integer
+          format: uint64
+          description: >-
+            Настоящий SteamID64, только для cat == player. Может отсутствовать
+            даже у игрока с непустым stable_id — 0, если у клиента-отправителя
+            в момент захвата уже не было PlayerState цели (владелец только
+            что отключился). Если задан, становится platform_id в
+            ark:stream:player_sighting вместо stable_id.
 
     TurretInfo:
       type: object

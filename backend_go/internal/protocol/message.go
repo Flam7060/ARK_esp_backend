@@ -138,6 +138,14 @@ type Entity struct {
 	// streamproducer.PlayerFields' own doc comment on why this is what's
 	// available today and how it's used downstream.
 	StableID uint64 `json:"stable_id,omitempty"`
+	// SteamID is the real SteamID64, set only for Cat == CategoryPlayer and
+	// only when the client actually resolved one (kopt::share::Sighting::
+	// steam_id -- 0 when the target's PlayerState was already gone at
+	// capture time, e.g. the owner had just disconnected). Distinct from
+	// StableID above: that one is an ARK-internal surrogate always present
+	// for a connected player, this one is the real cross-platform identity
+	// and may legitimately be absent even for one.
+	SteamID uint64 `json:"steam_id,omitempty"`
 }
 
 // Validate rejects an Entity that would corrupt the Redis live-view if

@@ -11,14 +11,19 @@ CategoryPlayer stopped being excluded from streamproducer.StreamNameFor):
                                                   ingestion (не готовый
                                                   UUID -- Go знает только
                                                   строку подключения)
-    platform_id              (str, обязателен)  — сейчас это ARK
-                                                   linked_player_data_id
-                                                   стрингифицированный, НЕ
-                                                   настоящий Steam/платформенный
-                                                   id (см.
+    platform_id              (str, обязателен)  — настоящий SteamID64,
+                                                   стрингифицированный, когда
+                                                   Go-продюсер его знает;
+                                                   иначе (владелец отключился
+                                                   в момент захвата на
+                                                   клиенте) — фоллбек на ARK
+                                                   linked_player_data_id (см.
                                                    streamproducer.PlayerFields'
                                                    собственный doc-комментарий
-                                                   на Go-стороне)
+                                                   на Go-стороне). Эта модель
+                                                   не различает две формы —
+                                                   для неё это просто строка-
+                                                   идентификатор.
     character_name          (str, опционален)  — текущий игровой ник
     level                   (int, опционален)  — Go-продюсер это поле пока не шлёт
     x, y, z                 (float, опциональны)

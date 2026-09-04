@@ -127,22 +127,23 @@ func EntityFields(e protocol.Entity, objectHash, serverIP string, observedAt tim
 // contract -- a different shape from EntityFields (no object_hash/class/
 // turret_*, structures/dinos have no equivalent of platform_id at all).
 //
-// platform_id is e.StableID (the client's linked_player_data_id),
-// stringified -- NOT a real Steam/Epic platform id. The client has no way
-// today to read another player's actual platform identity out of ARK's
-// process memory (confirmed: no PlayerState/UniqueNetId offset exists
-// anywhere in arkmultitool's runtime.cpp/runtime.hpp); linked_player_data_id
-// is the only cross-session-stable id available for an observed player,
-// same value already used for kopt::share::Sighting::stable_id and for
-// dedup Key construction elsewhere. Getting a real platform_id is a
-// separate, empirical reverse-engineering task (finding the right offset
-// against a live game process), not something this function can solve by
-// itself -- until then, every player row this producer creates is
-// identified by their in-game character id, not their platform account.
+// platform_id prefers e.SteamID (the real SteamID64, stringified) when the
+// client resolved one -- arkmultitool's read_player_steam_id (runtime.cpp)
+// found and verified the offset chain live in 2026-09; before that, no
+// PlayerState/UniqueNetId offset existed anywhere in the client, and this
+// function fell back to e.StableID (linked_player_data_id) unconditionally.
+// That fallback stays as-is when SteamID is 0 -- the client legitimately
+// can't always resolve it (target's owner disconnected between capture and
+// send, e.g.), and a row identified by in-game character id beats no row
+// at all.
 func PlayerFields(e protocol.Entity, serverIP string, observedAt time.Time, reportedByAccountID string) map[string]string {
+	platformID := e.StableID
+	if e.SteamID != 0 {
+		platformID = e.SteamID
+	}
 	fields := map[string]string{
 		"server_ip":              serverIP,
-		"platform_id":            strconv.FormatUint(e.StableID, 10),
+		"platform_id":            strconv.FormatUint(platformID, 10),
 		"x":                      strconv.FormatFloat(e.X, 'f', -1, 64),
 		"y":                      strconv.FormatFloat(e.Y, 'f', -1, 64),
 		"z":                      strconv.FormatFloat(e.Z, 'f', -1, 64),
