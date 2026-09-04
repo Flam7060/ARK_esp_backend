@@ -31,6 +31,7 @@ from models.auth_lookups import (
     GroupRole,
     InviteStatus,
 )
+from models.dino_density import DinoDensity
 from models.fingerprint import ComponentType, Fingerprint, FingerprintComponent
 from models.player import Player
 from models.sharing import GroupInviteToken, GroupMember, SharingGroup
@@ -61,6 +62,7 @@ __all__ = [
     "ArkStructureTurret",
     "Cluster",
     "ComponentType",
+    "DinoDensity",
     "Fingerprint",
     "FingerprintComponent",
     "GameMap",

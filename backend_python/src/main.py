@@ -28,7 +28,12 @@ from routers.v1 import (
     telemetry,
     tribes,
 )
-from services import dino_sighting_service, player_ingest_service, structure_sighting_service
+from services import (
+    dino_density_service,
+    dino_sighting_service,
+    player_ingest_service,
+    structure_sighting_service,
+)
 from services.structure_flush import start_scheduler
 
 configure_logging(debug=config.app.DEBUG)
@@ -87,6 +92,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # жизненному циклу запроса).
     scheduler_redis = redis.Redis(connection_pool=get_pool())
     scheduler = start_scheduler(scheduler_redis)
+    # Отдельный планировщик, а не job в общем: замер плотности читает тот
+    # же живой слой, но у него своя частота и своё "одно выполнение за
+    # раз" — склеивать их в один scheduler значило бы, что долгий проход
+    # по комнатам задерживает флаш структур.
+    density_scheduler = dino_density_service.start_scheduler(scheduler_redis)
 
     consumers = [
         _start_stream_consumer(
@@ -111,6 +121,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         scheduler.shutdown(wait=False)
+        density_scheduler.shutdown(wait=False)
         await scheduler_redis.aclose()
 
         for consumer in consumers:

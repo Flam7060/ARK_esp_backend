@@ -114,6 +114,38 @@ class RedisSetting(_Base):
     model_config = SettingsConfigDict(env_prefix="REDIS_", extra="ignore")
 
 
+class DensitySetting(_Base):
+    """Параметры агрегации тепловой карты ручных дино
+    (services/dino_density_service.py).
+
+    Здесь, а не литералами в коде: размер ячейки и окно определяют, как
+    выглядит карта, и подбираются на живых данных — менять их должно быть
+    перезапуском, а не пересборкой.
+    """
+
+    # 10 000 юнитов = 100 м, порядок габарита базы: мельче — карта
+    # рассыпается на отдельных животных, крупнее — две соседние базы
+    # сливаются в одно пятно. Значение входит в уникальный ключ строки
+    # (dino_density.cell_size_units), так что смена не портит старые
+    # данные, а заводит новый, явно отличимый слой замеров.
+    CELL_SIZE_UNITS: int = 10_000
+    # Окно агрегации: строка на (ячейка, трайб, час).
+    BUCKET_SECONDS: int = 3600
+    # Как часто снимать замер с живого слоя. Живой слой держит сущность
+    # 90с (RELAY_ENTITY_TTL), так что чаще смысла мало, а реже — начнём
+    # пропускать короткие заходы скаута.
+    INTERVAL_SECONDS: int = 60
+    # Индекс комнаты (ZSET) релей не чистит: сущность истекает по TTL из
+    # хеша, а её member в индексе остаётся. Читать весь индекс значит
+    # тянуть месяцы мусора ради горстки живых, поэтому берём только
+    # свежие по score (updated_at). Порог обязан быть НЕ МЕНЬШЕ
+    # RELAY_ENTITY_TTL на Go-стороне (90с по умолчанию) — иначе начнём
+    # терять живые сущности; с запасом на случай, если TTL поднимут.
+    LIVE_FLOOR_SECONDS: int = 900
+
+    model_config = SettingsConfigDict(env_prefix="DENSITY_", extra="ignore")
+
+
 class JWTSetting(_Base):
     """
     Настройки проверки JWT телеметрии (§7.3 telemetry-api-v1.md).
@@ -168,6 +200,7 @@ class Settings(BaseSettings):
     redis: RedisSetting = Field(default_factory=RedisSetting)
     jwt: JWTSetting = Field(default_factory=JWTSetting)
     security: SecuritySetting = Field(default_factory=SecuritySetting)
+    density: DensitySetting = Field(default_factory=DensitySetting)
 
     @classmethod
     def load(cls) -> Settings:
