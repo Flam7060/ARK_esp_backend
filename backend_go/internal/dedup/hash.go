@@ -58,6 +58,31 @@ func Key(cat protocol.Category, class string, x, y, z float64) string {
 	return fmt.Sprintf("%s:%s", cat, ContentHash(cat, class, x, y, z))
 }
 
+// KeyForDino builds the identity for a dino sighting. Separate from Key()
+// above because dino identity must include team, while ContentHash
+// deliberately excludes it for structures (ownership changing there is a
+// new fact worth its own row -- see ContentHash's doc comment). For a dino
+// the opposite holds: a wild rex and a tribe's tamed rex standing on the
+// same spot are two different animals, and a density map counting by tribe
+// falls apart if they share a key.
+//
+// Replaces the client-supplied "dino:{label}:{team}" shape, which collapsed
+// every identically-named animal of a team into ONE key -- all wild rexes
+// on a server were literally one entry in the live view. Computed
+// server-side (hub.fillComputedKeys) rather than fixed in the client so old
+// client builds get the corrected identity too.
+//
+// Known, bounded imprecision: animals of the same class and team inside one
+// gridStep cell still share a key. That undercounts a tight ball of tames,
+// but the alternative (a per-client instance id) would double-count the
+// same animal seen by two teammates -- and cross-client agreement is the
+// whole point of a shared view.
+func KeyForDino(class string, team int32, x, y, z float64) string {
+	h := fnv.New64a()
+	fmt.Fprintf(h, "%s|%s|%d|%d|%d|%d", protocol.CategoryDino, class, team, grid(x), grid(y), grid(z))
+	return fmt.Sprintf("%s:%s", protocol.CategoryDino, hex.EncodeToString(h.Sum(nil)))
+}
+
 // HashFromKey recovers the content hash from a Key built by Key(). Used to
 // fill "object_hash" on an explicit vanished-signal stream record, where
 // the caller has only the bare key string (protocol.Inbound.Vanished),

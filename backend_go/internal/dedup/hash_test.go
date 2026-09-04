@@ -77,3 +77,46 @@ func TestHashFromKey_RejectsMalformed(t *testing.T) {
 		t.Fatal("expected key without a colon to fail")
 	}
 }
+
+// The bug KeyForDino exists to fix: the old client-supplied
+// "dino:{label}:{team}" shape gave every identically-named animal of a team
+// one shared key, so a server's wild population collapsed into a single
+// live-view entry. Distinct positions must produce distinct keys.
+func TestKeyForDino_DifferentPositionsDifferentKeys(t *testing.T) {
+	a := KeyForDino("Rex_Character_BP_C", 0, 100.0, 200.0, 300.0)
+	b := KeyForDino("Rex_Character_BP_C", 0, 100_000.0, 200.0, 300.0)
+	if a == b {
+		t.Fatalf("expected dinos far apart to get distinct keys, both were %q", a)
+	}
+}
+
+func TestKeyForDino_DifferentTeamsDifferentKeys(t *testing.T) {
+	// A wild rex and a tribe's tamed rex on the same spot are two animals;
+	// a density map counting per tribe breaks if they share a key. This is
+	// why KeyForDino includes team while ContentHash deliberately doesn't.
+	wild := KeyForDino("Rex_Character_BP_C", 0, 100.0, 200.0, 300.0)
+	tamed := KeyForDino("Rex_Character_BP_C", 1387, 100.0, 200.0, 300.0)
+	if wild == tamed {
+		t.Fatalf("expected team to change the dino key, both were %q", wild)
+	}
+}
+
+func TestKeyForDino_SameCellSameKey(t *testing.T) {
+	// Cross-client agreement: the same animal reported by two teammates
+	// with slightly different sampled coordinates must count once, not
+	// twice. Both coordinates round into the same gridStep cell.
+	a := KeyForDino("Rex_Character_BP_C", 1387, 100.0, 200.0, 300.0)
+	b := KeyForDino("Rex_Character_BP_C", 1387, 110.0, 190.0, 305.0)
+	if a != b {
+		t.Fatalf("expected same-cell coordinates to share a key, got %q vs %q", a, b)
+	}
+}
+
+func TestKeyForDino_CategoryPrefixRecoverable(t *testing.T) {
+	// streamVanished routes bare keys by their category prefix, so the
+	// rewritten shape has to keep that property.
+	cat, ok := CategoryFromKey(KeyForDino("Rex_Character_BP_C", 1387, 1, 2, 3))
+	if !ok || cat != protocol.CategoryDino {
+		t.Fatalf("expected a recoverable dino prefix, got cat=%q ok=%v", cat, ok)
+	}
+}

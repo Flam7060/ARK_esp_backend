@@ -183,16 +183,30 @@ func (c *Client) readPump(ctx context.Context) {
 	}
 }
 
-// fillComputedKeys assigns Entity.Key for categories that have no
-// client-supplied identity convention (structure/turret — see
-// protocol.Entity.Key's doc comment and dedup.Key) before Validate runs.
-// Player/dino entities already arrive with a client-computed Key and are
-// left untouched.
+// fillComputedKeys assigns Entity.Key server-side before Validate runs, for
+// every category that shouldn't be trusted to the client's own convention.
+//
+// structure/turret: filled when absent — those never had a client-side Key
+// convention at all (see protocol.Entity.Key's doc comment and dedup.Key).
+//
+// dino: OVERWRITTEN even when the client sent one, because the shape older
+// clients send ("dino:{label}:{team}") collapses every identically-named
+// animal of a team into a single key — see dedup.KeyForDino. Overwriting
+// rather than filling is what makes the fix retroactive for clients already
+// in the field.
+//
+// player keeps its client-supplied key: stable_id is a real per-account id
+// there, not a guessed one.
 func fillComputedKeys(entities []protocol.Entity) {
 	for i := range entities {
 		e := &entities[i]
-		if e.Key == "" && (e.Cat == protocol.CategoryStructure || e.Cat == protocol.CategoryTurret) {
-			e.Key = dedup.Key(e.Cat, e.ClassName, e.X, e.Y, e.Z)
+		switch e.Cat {
+		case protocol.CategoryStructure, protocol.CategoryTurret:
+			if e.Key == "" {
+				e.Key = dedup.Key(e.Cat, e.ClassName, e.X, e.Y, e.Z)
+			}
+		case protocol.CategoryDino:
+			e.Key = dedup.KeyForDino(e.ClassName, e.Team, e.X, e.Y, e.Z)
 		}
 	}
 }

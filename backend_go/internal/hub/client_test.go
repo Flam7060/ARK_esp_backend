@@ -356,12 +356,46 @@ func TestStreamVanished_DinoKeyNotForwarded(t *testing.T) {
 	pub := &fakePublisher{}
 	c := newTestClient(store, hashes, pub)
 
-	// Dino keeps the client-supplied "{cat}:{label}:{team}" shape, not the
-	// computed "{cat}:{hash}" one -- HashFromKey on this would return
-	// "Rexy:42", not a real content hash, so it must not be forwarded.
+	// Vanished signals are only forwarded for structure/turret, whose
+	// removal is a durable fact worth a Postgres row. A dino key -- whatever
+	// shape it arrives in, client-supplied or rewritten by
+	// dedup.KeyForDino -- is never forwarded: wild dinos aren't persisted at
+	// all, and a tame that walked out of view hasn't been destroyed.
 	c.streamVanished(context.Background(), "dino:Rexy:42", time.Now())
 
 	if got := pub.count(); got != 0 {
 		t.Fatalf("expected a dino vanished-key to never be forwarded (no recoverable object_hash), got %d publishes", got)
+	}
+}
+
+// fillComputedKeys overwrites the dino key even when the client sent one --
+// that retroactively fixes clients already in the field, which is the whole
+// point of doing it server-side.
+func TestFillComputedKeys_OverwritesCollidingDinoKeys(t *testing.T) {
+	entities := []protocol.Entity{
+		{Cat: protocol.CategoryDino, Key: "dino:Rex:0", ClassName: "Rex_Character_BP_C", X: 0, Y: 0, Z: 0},
+		{Cat: protocol.CategoryDino, Key: "dino:Rex:0", ClassName: "Rex_Character_BP_C", X: 50_000, Y: 0, Z: 0},
+	}
+	fillComputedKeys(entities)
+
+	if entities[0].Key == entities[1].Key {
+		t.Fatalf("expected two rexes far apart to stop sharing a key, both were %q", entities[0].Key)
+	}
+	for i, e := range entities {
+		if e.Key == "dino:Rex:0" {
+			t.Errorf("entity %d kept the colliding client-supplied key", i)
+		}
+	}
+}
+
+func TestFillComputedKeys_LeavesPlayerKeyAlone(t *testing.T) {
+	// A player's key carries a real per-account stable_id, not a guess.
+	entities := []protocol.Entity{
+		{Cat: protocol.CategoryPlayer, Key: "player:8842091337:42", Label: "Steve", StableID: 8842091337},
+	}
+	fillComputedKeys(entities)
+
+	if entities[0].Key != "player:8842091337:42" {
+		t.Fatalf("expected the player key untouched, got %q", entities[0].Key)
 	}
 }
