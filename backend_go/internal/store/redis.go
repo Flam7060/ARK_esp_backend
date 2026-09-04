@@ -41,13 +41,17 @@ import (
 // ARGV[13] = health
 // ARGV[14] = max_health
 // ARGV[15] = held_item (may be empty)
+// ARGV[16] = tamed ("1"/"0") -- only meaningful for cat == dino; read by
+//            backend_python's density aggregation to count tames per cell
+//            without re-deriving ownership from team heuristics.
 const entityUpsertScript = `
 redis.call('HSET', KEYS[1],
   'cat', ARGV[2], 'team', ARGV[3], 'label', ARGV[4],
   'x', ARGV[5], 'y', ARGV[6], 'z', ARGV[7],
   'reported_by', ARGV[8], 'updated_at', ARGV[9],
   'tribe', ARGV[11], 'status', ARGV[12],
-  'health', ARGV[13], 'max_health', ARGV[14], 'held_item', ARGV[15])
+  'health', ARGV[13], 'max_health', ARGV[14], 'held_item', ARGV[15],
+  'tamed', ARGV[16])
 redis.call('EXPIRE', KEYS[1], ARGV[10])
 redis.call('ZADD', KEYS[2], ARGV[9], ARGV[1])
 return 1
@@ -71,6 +75,10 @@ type EntityWrite struct {
 	Health     float64
 	MaxHealth  float64
 	HeldItem   string
+	// Tamed mirrors protocol.Entity.Tamed -- only meaningful for cat ==
+	// dino. Kept in the live view (not just the durable stream) because the
+	// density aggregation reads this layer, not Postgres.
+	Tamed bool
 }
 
 // EntityStore writes live entity sightings to Redis under the shared
@@ -97,7 +105,7 @@ func (s *EntityStore) Upsert(ctx context.Context, w EntityWrite) error {
 	err := s.script.Run(ctx, s.rdb, []string{hashKey, indexKey},
 		w.Key, w.Cat, w.Team, w.Label, w.X, w.Y, w.Z,
 		w.ReportedBy, w.UpdatedAt.UnixMilli(), ttlSeconds, w.Tribe, w.Status,
-		w.Health, w.MaxHealth, w.HeldItem,
+		w.Health, w.MaxHealth, w.HeldItem, boolField(w.Tamed),
 	).Err()
 	if err != nil {
 		return fmt.Errorf("store: upsert entity %s/%s/%s: %w", w.GroupID, w.ServerIP, w.Key, err)
@@ -139,6 +147,17 @@ func (s *EntityStore) SetLastHash(ctx context.Context, groupID, serverIP, key, h
 		return fmt.Errorf("store: set last hash %s: %w", hashKey, err)
 	}
 	return nil
+}
+
+// boolField renders a bool as the "1"/"0" the hash field carries -- Lua has
+// no bool argument type over the redis protocol, and "true"/"false" strings
+// would push the parsing quirk onto every reader instead of settling it
+// here once.
+func boolField(v bool) string {
+	if v {
+		return "1"
+	}
+	return "0"
 }
 
 func entityHashKey(groupID, serverIP, key string) string {

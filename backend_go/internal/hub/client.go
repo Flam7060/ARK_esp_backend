@@ -220,6 +220,7 @@ func (c *Client) handleSighting(ctx context.Context, msg protocol.Inbound) {
 			ReportedBy: c.AccountID, UpdatedAt: now,
 			Tribe: e.Tribe, Status: string(e.Status),
 			Health: e.Health, MaxHealth: e.MaxHealth, HeldItem: e.HeldItem,
+			Tamed: e.Tamed,
 		}
 		if err := c.store.Upsert(ctx, w); err != nil {
 			// One entity's write failing (Redis hiccup) doesn't invalidate
@@ -268,6 +269,15 @@ func (c *Client) maybeStream(ctx context.Context, e protocol.Entity, now time.Ti
 	// data to record" call as get_or_create_tribe makes for a blank
 	// tribe_name.
 	if e.Cat == protocol.CategoryPlayer && e.StableID == 0 {
+		return
+	}
+	// Wild creatures never reach Postgres. They have no owner, no stable
+	// identity and no per-animal facts worth a durable row -- what matters
+	// about them ("something is here right now") is exactly what the live
+	// Redis view already answers, and persisting them was the bulk of the
+	// dino write volume. A tame is the opposite: it belongs to a tribe, so
+	// where and how many there are is real intel.
+	if e.Cat == protocol.CategoryDino && !e.Tamed {
 		return
 	}
 

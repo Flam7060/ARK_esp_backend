@@ -109,6 +109,14 @@ func EntityFields(e protocol.Entity, objectHash, serverIP string, observedAt tim
 		fields["health"] = strconv.FormatFloat(e.Health, 'f', -1, 64)
 		fields["max_health"] = strconv.FormatFloat(e.MaxHealth, 'f', -1, 64)
 	}
+	// Только для дино: у структур владение выражается трайбом, "приручено"
+	// для них не значит ничего. hub.maybeStream уже отсеял диких раньше, но
+	// поле всё равно едет -- backend_python's DinoSighting.tamed это вторая
+	// линия на случай сообщения от старой сборки релея, и без явного поля
+	// она отбраковала бы вообще всех, включая ручных.
+	if e.Cat == protocol.CategoryDino {
+		fields["tamed"] = strconv.FormatBool(e.Tamed)
+	}
 	if e.Turret != nil {
 		if e.Turret.Ammo != nil {
 			fields["turret_ammo"] = strconv.FormatInt(int64(*e.Turret.Ammo), 10)

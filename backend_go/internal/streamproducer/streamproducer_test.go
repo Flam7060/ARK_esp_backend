@@ -7,6 +7,29 @@ import (
 	"ark_relay/internal/protocol"
 )
 
+// Без явного поля backend_python's DinoSighting.tamed (дефолт False)
+// отбраковал бы и ручных тоже -- то есть дино перестали бы сохраняться
+// вообще. Проверяем, что поле реально уезжает в стрим.
+func TestEntityFields_DinoCarriesTamed(t *testing.T) {
+	e := protocol.Entity{Cat: protocol.CategoryDino, ClassName: "Rex_Character_BP_C", Tamed: true}
+	fields := EntityFields(e, "hash", "1.2.3.4:7777", time.Now(), "acct-1", "")
+
+	if fields["tamed"] != "true" {
+		t.Fatalf("expected tamed=true in the dino stream fields, got %q", fields["tamed"])
+	}
+}
+
+func TestEntityFields_StructureHasNoTamed(t *testing.T) {
+	// Владение структурой выражается трайбом; "приручено" для неё пустой
+	// признак, и класть его значило бы гнать шум в каждый XADD.
+	e := protocol.Entity{Cat: protocol.CategoryStructure, ClassName: "MetalWall_C"}
+	fields := EntityFields(e, "hash", "1.2.3.4:7777", time.Now(), "acct-1", "")
+
+	if _, ok := fields["tamed"]; ok {
+		t.Fatalf("expected no tamed field for a structure, got fields=%v", fields)
+	}
+}
+
 func TestPlayerFields_PrefersSteamIDOverStableID(t *testing.T) {
 	e := protocol.Entity{StableID: 555, SteamID: 76561198335594996, Label: "Steve"}
 	fields := PlayerFields(e, "1.2.3.4:7777", time.Now(), "acct-1")

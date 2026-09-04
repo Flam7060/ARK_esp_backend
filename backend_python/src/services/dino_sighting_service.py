@@ -30,6 +30,13 @@ class DinoSighting(BaseModel):
     class_: str | None = None  # alias would collide with Python's "class" keyword; set manually below
     tribe_name: str | None = None
     team: int | None = None
+    # Дикие существа в Postgres не пишутся вовсе (см. ingest_dino_sighting).
+    # Дефолт False, а не True: сообщение без поля — это либо дикий, либо
+    # клиент старой сборки, и в обоих случаях правильнее не записать, чем
+    # записать неизвестно что. Релей и так отсекает диких раньше
+    # (hub.maybeStream), эта проверка — вторая линия на случай, если в
+    # стриме окажется сообщение от старой версии релея.
+    tamed: bool = False
     x: float | None = None
     y: float | None = None
     z: float | None = None
@@ -67,6 +74,14 @@ def parse_sighting(fields: StreamFields) -> DinoSighting | None:
 def ingest_dino_sighting(session: Session, sighting: DinoSighting) -> None:
     if sighting.class_ is None:
         logger.warning("dino_sighting: message missing class, dropping: %s", sighting.object_hash)
+        return
+
+    if not sighting.tamed:
+        # Дикие не имеют владельца, устойчивой идентичности и фактов,
+        # достойных durable-строки: всё, что про них важно ("тут кто-то
+        # есть прямо сейчас"), уже отвечает живой Redis-слой. Тихо
+        # пропускаем -- тем же приёмом "данных недостаточно, чтобы
+        # записывать", что get_or_create_tribe применяет к пустому имени.
         return
 
     server = server_repo.get_or_create_server_by_ip(session, sighting.server_ip)

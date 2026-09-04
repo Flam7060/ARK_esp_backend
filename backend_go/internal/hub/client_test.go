@@ -368,6 +368,45 @@ func TestStreamVanished_DinoKeyNotForwarded(t *testing.T) {
 	}
 }
 
+func TestMaybeStream_WildDinoNeverPublishes(t *testing.T) {
+	store := &fakeEntityWriter{}
+	hashes := newFakeHashCache()
+	pub := &fakePublisher{}
+	c := newTestClient(store, hashes, pub)
+
+	// Wild creatures live only in the Redis live view -- persisting them was
+	// the bulk of the dino write volume and bought nothing durable.
+	e := protocol.Entity{
+		Cat: protocol.CategoryDino, Key: "dino:abc", ClassName: "Rex_Character_BP_C",
+		Label: "Rex", Team: 0, X: 100, Y: 200, Z: 300, Tamed: false,
+	}
+	c.maybeStream(context.Background(), e, time.Now(), "")
+
+	if got := pub.count(); got != 0 {
+		t.Fatalf("expected a wild dino to never reach the stream, got %d publishes", got)
+	}
+}
+
+func TestMaybeStream_TamedDinoPublishes(t *testing.T) {
+	store := &fakeEntityWriter{}
+	hashes := newFakeHashCache()
+	pub := &fakePublisher{}
+	c := newTestClient(store, hashes, pub)
+
+	e := protocol.Entity{
+		Cat: protocol.CategoryDino, Key: "dino:abc", ClassName: "Rex_Character_BP_C",
+		Label: "Rexy", Team: 1387, X: 100, Y: 200, Z: 300, Tamed: true,
+	}
+	c.maybeStream(context.Background(), e, time.Now(), "")
+
+	if got := pub.count(); got != 1 {
+		t.Fatalf("expected a tamed dino to reach the stream, got %d publishes", got)
+	}
+	if call := pub.last(); call.stream != "ark:stream:dino_sighting" {
+		t.Fatalf("expected the dino stream, got %q", call.stream)
+	}
+}
+
 // fillComputedKeys overwrites the dino key even when the client sent one --
 // that retroactively fixes clients already in the field, which is the whole
 // point of doing it server-side.

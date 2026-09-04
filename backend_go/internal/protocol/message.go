@@ -146,6 +146,18 @@ type Entity struct {
 	// for a connected player, this one is the real cross-platform identity
 	// and may legitimately be absent even for one.
 	SteamID uint64 `json:"steam_id,omitempty"`
+	// Tamed says whether a Cat == CategoryDino creature belongs to a tribe
+	// (kopt::share::Sighting::tamed, read from APrimalDinoCharacter::
+	// TamedName on the client). Meaningless for every other category.
+	//
+	// Deliberately NOT omitempty-sensitive in meaning: a missing field and
+	// an explicit false both mean "wild", and wild creatures are never
+	// written to Postgres at all (hub.maybeStream) -- they exist only in
+	// the live Redis view for ESP. An older client that doesn't send the
+	// field therefore stops persisting dinos entirely rather than filling
+	// the durable store with wildlife, which is the intended failure
+	// direction.
+	Tamed bool `json:"tamed,omitempty"`
 }
 
 // Validate rejects an Entity that would corrupt the Redis live-view if
